@@ -11,19 +11,29 @@ import { redisStore } from 'cache-manager-redis-store';
  */
 export const getRedisConfig = async (configService: ConfigService): Promise<any> => {
   const isTest = process.env.NODE_ENV === 'test';
+  const redisUrl = configService.get<string>('REDIS_URL');
   const ttl = configService.get<number>('REPUTATION_CACHE_TTL', 300);
 
-  if (isTest) {
+  // If we are in test mode or no Redis URL is provided, fall back to in-memory store
+  if (isTest || !redisUrl) {
     return {
       ttl,
     };
   }
 
-  return {
-    store: await redisStore({
-      url: configService.get<string>('REDIS_URL', 'redis://localhost:6379'),
+  // Use Redis only if explicitly configured
+  try {
+    return {
+      store: await redisStore({
+        url: redisUrl,
+        ttl,
+      }),
       ttl,
-    }),
-    ttl,
-  };
+    };
+  } catch (error) {
+    console.warn('Failed to initialize Redis store, falling back to in-memory cache:', error.message);
+    return {
+      ttl,
+    };
+  }
 };
