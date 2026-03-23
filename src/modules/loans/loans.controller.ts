@@ -17,6 +17,8 @@ import {
 import { LoansService } from './loans.service';
 import { LoanQuoteRequestDto } from './dto/loan-quote-request.dto';
 import { LoanQuoteResponseDto } from './dto/loan-quote-response.dto';
+import { CreateLoanResponseDto } from './dto/create-loan-response.dto';
+import { CreateLoanRequestDto } from './dto/create-loan-request.dto';
 
 /** Validates Stellar Ed25519 public key format (G + 55 base32 characters) */
 const STELLAR_WALLET_REGEX = /^G[A-Z2-7]{55}$/;
@@ -59,6 +61,39 @@ export class LoansController {
 
     const data = await this.loansService.calculateLoanQuote(wallet, dto);
     return { success: true, data, message: 'Loan quote calculated successfully' };
+  }
+
+  @Post('create')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiHeader({
+    name: 'x-wallet-address',
+    description:
+      'Stellar wallet address (temporary - will be replaced by JWT auth once JwtAuthGuard is wired)',
+    required: true,
+    example: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW',
+  })
+  @ApiOperation({
+    summary: 'Create BNPL loan',
+    description:
+      'Creates a pending BNPL loan record and returns an unsigned Soroban XDR transaction for the user to sign. Uses temporary x-wallet-address authentication until JwtAuthGuard is implemented.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Pending loan created and unsigned transaction generated successfully',
+    type: CreateLoanResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid input, insufficient reputation, or amount exceeds credit limit' })
+  @ApiResponse({ status: 404, description: 'Merchant not found' })
+  @ApiResponse({ status: 500, description: 'Failed to construct XDR or persist pending loan' })
+  async createLoan(
+    @Headers('x-wallet-address') wallet: string,
+    @Body() dto: CreateLoanRequestDto,
+  ) {
+    this.validateWallet(wallet);
+
+    const data = await this.loansService.createLoan(wallet, dto);
+    return { success: true, data, message: 'Pending loan created successfully' };
   }
 
   /**
