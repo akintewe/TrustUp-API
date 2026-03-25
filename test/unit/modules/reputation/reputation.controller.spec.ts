@@ -48,23 +48,23 @@ describe('ReputationController', () => {
   // ---------------------------------------------------------------------------
   // GET /reputation/:wallet
   // ---------------------------------------------------------------------------
-  describe('getReputation', () => {
+  describe('getScore', () => {
     it('should return reputation data wrapped in response envelope', async () => {
       mockReputationService.getReputationScore.mockResolvedValue(mockReputationResponse);
 
-      const result = await controller.getReputation(validWallet);
+      const result = await controller.getScore(validWallet);
 
       expect(result).toEqual({
         success: true,
         data: mockReputationResponse,
-        message: 'Reputation score retrieved successfully',
+        message: 'Reputation data retrieved successfully',
       });
       expect(reputationService.getReputationScore).toHaveBeenCalledWith(validWallet);
       expect(reputationService.getReputationScore).toHaveBeenCalledTimes(1);
     });
 
     it('should throw BadRequestException for invalid wallet format (too short)', async () => {
-      await expect(controller.getReputation('GABC')).rejects.toThrow(
+      await expect(controller.getScore('GABC')).rejects.toThrow(
         BadRequestException,
       );
       expect(reputationService.getReputationScore).not.toHaveBeenCalled();
@@ -73,14 +73,14 @@ describe('ReputationController', () => {
     it('should throw BadRequestException for wallet not starting with G', async () => {
       const badWallet = 'XABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW';
 
-      await expect(controller.getReputation(badWallet)).rejects.toThrow(
+      await expect(controller.getScore(badWallet)).rejects.toThrow(
         BadRequestException,
       );
     });
 
-    it('should throw BadRequestException with VALIDATION_INVALID_WALLET code', async () => {
-      await expect(controller.getReputation('invalid')).rejects.toMatchObject({
-        response: { code: 'VALIDATION_INVALID_WALLET' },
+    it('should throw BadRequestException with validation error message', async () => {
+      await expect(controller.getScore('invalid')).rejects.toMatchObject({
+        response: { success: false, message: 'Invalid Stellar wallet address format' },
       });
     });
 
@@ -89,7 +89,7 @@ describe('ReputationController', () => {
         new Error('Contract read failed'),
       );
 
-      await expect(controller.getReputation(validWallet)).rejects.toThrow(
+      await expect(controller.getScore(validWallet)).rejects.toThrow(
         'Contract read failed',
       );
     });
@@ -98,11 +98,12 @@ describe('ReputationController', () => {
   // ---------------------------------------------------------------------------
   // GET /reputation/me
   // ---------------------------------------------------------------------------
-  describe('getMyReputation', () => {
+  describe('getMyScore', () => {
     it('should throw UnauthorizedException since auth guard is not yet wired', async () => {
-      await expect(controller.getMyReputation()).rejects.toThrow(
+      await expect(controller.getMyScore({})).rejects.toThrow(
         UnauthorizedException,
       );
     });
   });
 });
+
