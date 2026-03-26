@@ -2,15 +2,17 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { LoansController } from './loans.controller';
 import { LoansService } from './loans.service';
+import { AuthModule } from '../auth/auth.module';
 import { ReputationModule } from '../reputation/reputation.module';
 import { SupabaseService } from '../../database/supabase.client';
 import { SorobanService } from '../../blockchain/soroban/soroban.service';
 import { CreditLineContractClient } from '../../blockchain/contracts/credit-line-contract.client';
 
 @Module({
-  imports: [ConfigModule, ReputationModule],
+  imports: [ConfigModule, AuthModule, ReputationModule],
   controllers: [LoansController],
   providers: [LoansService, SupabaseService, SorobanService, CreditLineContractClient],
   exports: [LoansService],
 })
 export class LoansModule {}
+

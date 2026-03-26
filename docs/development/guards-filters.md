@@ -19,9 +19,15 @@ export class CustomGuard implements CanActivate {
 
 ### JWT Guard
 
-- Use `@UseGuards(JwtAuthGuard)` in controllers
-- Extract user from token
-- Validate expiration
+`JwtAuthGuard` extends `AuthGuard('jwt')` from `@nestjs/passport` and delegates to `JwtStrategy`.
+
+- Apply `@UseGuards(JwtAuthGuard)` to any protected endpoint
+- `JwtStrategy` extracts the `Bearer` token from the `Authorization` header, verifies it with `JWT_SECRET`, and sets `req.user = { wallet: string }`
+- Access the authenticated user in a controller via `@CurrentUser() user: { wallet: string }`
+- Error handling in `handleRequest()`:
+  - Expired token → `401 AUTH_TOKEN_EXPIRED`
+  - Missing, invalid, or malformed token → `401 AUTH_TOKEN_INVALID`
+- Only tokens with `type === 'access'` are accepted (refresh tokens are rejected)
 
 ### Wallet Signature Guard
 

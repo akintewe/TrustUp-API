@@ -53,7 +53,7 @@ describe('ReputationService', () => {
         expect(service).toBeDefined();
     });
 
-    describe('getReputationData', () => {
+    describe('getReputationScore', () => {
         const wallet = 'GABC123TEST';
         const cacheKey = `reputation:${wallet}`;
 
@@ -68,7 +68,7 @@ describe('ReputationService', () => {
             };
             mockCacheManager.get.mockResolvedValue(mockReputation);
 
-            const result = await service.getReputationData(wallet);
+            const result = await service.getReputationScore(wallet);
 
             expect(result).toEqual(mockReputation);
             expect(mockCacheManager.get).toHaveBeenCalledWith(cacheKey);
@@ -81,7 +81,7 @@ describe('ReputationService', () => {
                 error: null,
             });
 
-            const result = await service.getReputationData(wallet);
+            const result = await service.getReputationScore(wallet);
 
             expect(result.score).toBe(75);
             expect(result.tier).toBe('silver');
@@ -92,7 +92,7 @@ describe('ReputationService', () => {
             mockCacheManager.get.mockResolvedValue(null);
             mockSupabaseClient.single.mockResolvedValue({ data: null, error: 'Not found' });
 
-            const result = await service.getReputationData(wallet);
+            const result = await service.getReputationScore(wallet);
 
             expect(result).toHaveProperty('score');
             expect(result).toHaveProperty('tier');
@@ -106,7 +106,7 @@ describe('ReputationService', () => {
             mockSupabaseClient.single.mockResolvedValueOnce({ data: null, error: 'Not found' })
                 .mockResolvedValueOnce({ data: { id: 'user-id' }, error: null });
 
-            await service.getReputationData(wallet);
+            await service.getReputationScore(wallet);
 
             // Verify that we are using 'wallet_address' and not 'wallet'
             expect(mockSupabaseClient.from).toHaveBeenCalledWith('users');

@@ -3,6 +3,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { LoansService } from '../../../../src/modules/loans/loans.service';
 import { ReputationService } from '../../../../src/modules/reputation/reputation.service';
 import { SupabaseService } from '../../../../src/database/supabase.client';
+import { CreditLineContractClient } from '../../../../src/blockchain/contracts/credit-line-contract.client';
 
 describe('LoansService', () => {
   let service: LoansService;
@@ -28,12 +29,17 @@ describe('LoansService', () => {
     getServiceRoleClient: jest.fn().mockReturnValue(mockSupabaseClient),
   };
 
+  const mockCreditLineClient = {
+    buildRepayLoanTx: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LoansService,
         { provide: ReputationService, useValue: mockReputationService },
         { provide: SupabaseService, useValue: mockSupabaseService },
+        { provide: CreditLineContractClient, useValue: mockCreditLineClient },
       ],
     }).compile();
 

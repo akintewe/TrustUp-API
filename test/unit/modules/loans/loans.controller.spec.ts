@@ -1,5 +1,4 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
 import { LoansController } from '../../../../src/modules/loans/loans.controller';
 import { LoansService } from '../../../../src/modules/loans/loans.service';
 
@@ -61,7 +60,8 @@ describe('LoansController', () => {
     it('should return a loan quote wrapped in response envelope', async () => {
       mockLoansService.calculateLoanQuote.mockResolvedValue(mockQuoteResponse);
 
-      const result = await controller.getLoanQuote(validWallet, validDto);
+      const user = { wallet: validWallet };
+      const result = await controller.getLoanQuote(user, validDto);
 
       expect(result).toEqual({
         success: true,
@@ -75,47 +75,14 @@ describe('LoansController', () => {
       expect(loansService.calculateLoanQuote).toHaveBeenCalledTimes(1);
     });
 
-    it('should throw BadRequestException for missing wallet header', async () => {
-      await expect(
-        controller.getLoanQuote(undefined as any, validDto),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw BadRequestException for empty wallet header', async () => {
-      await expect(
-        controller.getLoanQuote('', validDto),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw BadRequestException for invalid wallet format', async () => {
-      await expect(
-        controller.getLoanQuote('INVALID_WALLET', validDto),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw BadRequestException with VALIDATION_INVALID_WALLET code', async () => {
-      await expect(
-        controller.getLoanQuote('short', validDto),
-      ).rejects.toMatchObject({
-        response: { code: 'VALIDATION_INVALID_WALLET' },
-      });
-    });
-
-    it('should throw BadRequestException for wallet not starting with G', async () => {
-      const badWallet = 'XABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW';
-
-      await expect(
-        controller.getLoanQuote(badWallet, validDto),
-      ).rejects.toThrow(BadRequestException);
-    });
-
     it('should propagate service errors to the caller', async () => {
       mockLoansService.calculateLoanQuote.mockRejectedValue(
         new Error('Reputation fetch failed'),
       );
 
+      const user = { wallet: validWallet };
       await expect(
-        controller.getLoanQuote(validWallet, validDto),
+        controller.getLoanQuote(user, validDto),
       ).rejects.toThrow('Reputation fetch failed');
     });
   });

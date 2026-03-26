@@ -2,20 +2,17 @@ import {
   Controller,
   Post,
   Body,
-  Headers,
   Param,
   ParseUUIDPipe,
   UseGuards,
   HttpCode,
   HttpStatus,
-  BadRequestException,
 } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
-  ApiHeader,
   ApiParam,
 } from '@nestjs/swagger';
 import { LoansService } from './loans.service';
@@ -26,9 +23,6 @@ import { LoanPaymentResponseDto } from './dto/loan-payment-response.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
-/** Validates Stellar Ed25519 public key format (G + 55 base32 characters) */
-const STELLAR_WALLET_REGEX = /^G[A-Z2-7]{55}$/;
-
 @ApiTags('loans')
 @Controller('loans')
 export class LoansController {
@@ -36,18 +30,12 @@ export class LoansController {
 
   @Post('quote')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiHeader({
-    name: 'x-wallet-address',
-    description:
-      'Stellar wallet address (temporary — will be replaced by JWT auth once JwtAuthGuard is wired)',
-    required: true,
-    example: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW',
-  })
   @ApiOperation({
     summary: 'Calculate loan quote',
     description:
-      'Calculates loan terms (interest rate, repayment schedule, total cost) based on user reputation without creating an actual loan on-chain. Requires JWT authentication (currently uses x-wallet-address header until JwtAuthGuard is wired).',
+      'Calculates loan terms (interest rate, repayment schedule, total cost) based on user reputation without creating an actual loan on-chain. Requires JWT authentication.',
   })
   @ApiResponse({
     status: 200,
@@ -58,14 +46,10 @@ export class LoansController {
   @ApiResponse({ status: 401, description: 'Unauthorized — missing or invalid JWT' })
   @ApiResponse({ status: 404, description: 'Merchant not found' })
   async getLoanQuote(
-    @Headers('x-wallet-address') wallet: string,
+    @CurrentUser() user: { wallet: string },
     @Body() dto: LoanQuoteRequestDto,
   ) {
-    // TODO: Replace x-wallet-address header with @UseGuards(JwtAuthGuard) + @CurrentUser()
-    // once API-03 (auth guards) is implemented.
-    this.validateWallet(wallet);
-
-    const data = await this.loansService.calculateLoanQuote(wallet, dto);
+    const data = await this.loansService.calculateLoanQuote(user.wallet, dto);
     return { success: true, data, message: 'Loan quote calculated successfully' };
   }
 
@@ -100,18 +84,5 @@ export class LoansController {
     const data = await this.loansService.repayLoan(user.wallet, loanId, dto);
     return { success: true, data, message: 'Repayment transaction constructed successfully' };
   }
-
-  /**
-   * Validates the wallet address format.
-   * Temporary — will be removed once JwtAuthGuard extracts the wallet from JWT.
-   */
-  private validateWallet(wallet: string): void {
-    if (!wallet || !STELLAR_WALLET_REGEX.test(wallet)) {
-      throw new BadRequestException({
-        code: 'VALIDATION_INVALID_WALLET',
-        message:
-          'Invalid or missing wallet address. Provide a valid Stellar wallet in the x-wallet-address header.',
-      });
-    }
-  }
 }
+

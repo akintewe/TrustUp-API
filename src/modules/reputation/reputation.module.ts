@@ -3,7 +3,7 @@ import { CacheModule } from '@nestjs/cache-manager';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ReputationService } from './reputation.service';
 import { ReputationController } from './reputation.controller';
-import { getRedisConfig } from '../../config/redis.config';
+import * as redisStore from 'cache-manager-redis-store';
 import { SupabaseService } from '../../database/supabase.client';
 
 @Module({
@@ -11,7 +11,10 @@ import { SupabaseService } from '../../database/supabase.client';
         CacheModule.registerAsync({
             imports: [ConfigModule],
             inject: [ConfigService],
-            useFactory: getRedisConfig,
+            useFactory: async (configService: ConfigService) => ({
+                store: redisStore,
+                url: configService.get<string>('REDIS_URL', 'redis://localhost:6379'),
+            }),
         }),
     ],
     providers: [ReputationService, SupabaseService],

@@ -30,7 +30,7 @@ export class ReputationController {
             });
         }
 
-        const data = await this.reputationService.getReputationData(wallet);
+        const data = await this.reputationService.getReputationScore(wallet);
 
         return {
             success: true,
@@ -51,7 +51,7 @@ export class ReputationController {
             });
         }
 
-        const data = await this.reputationService.getReputationData(wallet);
+        const data = await this.reputationService.getReputationScore(wallet);
 
         return {
             success: true,

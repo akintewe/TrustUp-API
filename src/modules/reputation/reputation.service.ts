@@ -42,7 +42,7 @@ export class ReputationService implements OnModuleInit {
      * @param wallet Stellar wallet address
      * @returns reputation object
      */
-    async getReputationData(wallet: string): Promise<Reputation> {
+    async getReputationScore(wallet: string): Promise<Reputation> {
         const cacheKey = `reputation:${wallet}`;
 
         try {
