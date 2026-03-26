@@ -2,15 +2,18 @@ import {
   Injectable,
   InternalServerErrorException,
   UnauthorizedException,
+  ConflictException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomBytes } from 'crypto';
 import { Keypair, StrKey } from 'stellar-sdk';
 import { SupabaseService } from '../../database/supabase.client';
+import { UsersRepository } from '../../database/repositories/users.repository';
 import { NonceResponseDto } from './dto/nonce-response.dto';
 import { VerifyRequestDto } from './dto/verify-request.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
+import { RegisterRequestDto } from './dto/register-request.dto';
 import {
   ACCESS_TOKEN_EXPIRATION,
   ACCESS_TOKEN_EXPIRATION_SECONDS,
@@ -27,7 +30,61 @@ export class AuthService {
     private readonly supabaseService: SupabaseService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly usersRepository: UsersRepository,
   ) {}
+
+  /**
+   * Registers a new user with comprehensive profile information.
+   * Handles duplicate checking, optional image upload, user creation, and issues JWT tokens.
+   */
+  async register(dto: RegisterRequestDto, profileImage?: any): Promise<any> {
+    // 1. Check if wallet address already exists
+    const existingWallet = await this.usersRepository.findByWallet(dto.walletAddress);
+    if (existingWallet) {
+      throw new ConflictException({
+        code: 'AUTH_WALLET_EXISTS',
+        message: 'Wallet address is already registered.',
+      });
+    }
+
+    // 2. Check if username is already taken
+    const usernameTaken = await this.usersRepository.checkUsernameExists(dto.username);
+    if (usernameTaken) {
+      throw new ConflictException({
+        code: 'AUTH_USERNAME_TAKEN',
+        message: 'Username is already taken.',
+      });
+    }
+
+    // 3. Handle optional profile image upload to Supabase Storage
+    let avatarUrl: string | null = null;
+    if (profileImage) {
+      avatarUrl = await this.usersRepository.uploadAvatar(dto.walletAddress, profileImage);
+    }
+
+    // 4. Create the new user record in the database
+    const user = await this.usersRepository.createProfile({
+      wallet: dto.walletAddress,
+      username: dto.username,
+      displayName: dto.displayName,
+      avatarUrl,
+    });
+
+    // 5. Generate and return JWT tokens (this seamlessly re-uses existing session logic)
+    const tokens = await this.generateTokens(dto.walletAddress);
+
+    return {
+      user: {
+        id: user.id,
+        walletAddress: user.wallet_address,
+        username: user.username,
+        displayName: user.display_name,
+        avatarUrl: user.avatar_url,
+        createdAt: user.created_at,
+      },
+      ...tokens,
+    };
+  }
 
   /**
    * Generates a cryptographically secure nonce for wallet signature authentication.
