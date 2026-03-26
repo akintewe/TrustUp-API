@@ -303,7 +303,7 @@ This project is licensed under the MIT License - see the [LICENSE](./LICENSE) fi
   <a href="https://github.com/BrayanMQ">
     <img src="https://avatars.githubusercontent.com/u/49928451?v=4" width="100px;" style="border-radius:50%;" alt="BrayanMQ"/><br />
     <sub><b>🥇 @BrayanMQ</b></sub><br />
-    <sub>16 contributions</sub>
+    <sub>25 contributions</sub>
   </a>
 </td>
 
