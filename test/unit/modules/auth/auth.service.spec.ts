@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from '../../../../src/modules/auth/auth.service';
 import { SupabaseService } from '../../../../src/database/supabase.client';
+import { UsersRepository } from '../../../../src/database/repositories/users.repository';
 
 // Mock Stellar SDK to avoid real crypto operations in unit tests
 jest.mock('stellar-sdk', () => ({
@@ -33,6 +34,13 @@ describe('AuthService', () => {
     get: jest.fn().mockReturnValue('mock-secret'),
   };
 
+  const mockUsersRepository = {
+    findByWallet: jest.fn(),
+    checkUsernameExists: jest.fn(),
+    uploadAvatar: jest.fn(),
+    createProfile: jest.fn(),
+  };
+
   const validWallet = 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW';
 
   beforeEach(async () => {
@@ -42,6 +50,7 @@ describe('AuthService', () => {
         { provide: SupabaseService, useValue: mockSupabaseService },
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: UsersRepository, useValue: mockUsersRepository },
       ],
     }).compile();
 

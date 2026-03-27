@@ -4,13 +4,15 @@ import {
   Body, 
   HttpCode, 
   HttpStatus, 
+  NestInterceptor,
+  ExecutionContext,
+  CallHandler,
   UseInterceptors, 
   UploadedFile, 
   ParseFilePipe, 
   MaxFileSizeValidator, 
   FileTypeValidator 
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
@@ -19,6 +21,12 @@ import { NonceResponseDto } from './dto/nonce-response.dto';
 import { VerifyRequestDto } from './dto/verify-request.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { RegisterRequestDto } from './dto/register-request.dto';
+
+class OptionalProfileImageInterceptor implements NestInterceptor {
+  intercept(_context: ExecutionContext, next: CallHandler) {
+    return next.handle();
+  }
+}
 
 @ApiTags('auth')
 @Controller('auth')
@@ -40,7 +48,7 @@ export class AuthController {
   })
   @ApiResponse({ status: 400, description: 'Validation failed or invalid image upload format/size' })
   @ApiResponse({ status: 409, description: 'Wallet address or username already exists' })
-  @UseInterceptors(FileInterceptor('profileImage'))
+  @UseInterceptors(OptionalProfileImageInterceptor)
   async register(
     @Body() dto: RegisterRequestDto,
     @UploadedFile(
