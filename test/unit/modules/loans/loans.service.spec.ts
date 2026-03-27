@@ -1,9 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  InternalServerErrorException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { LoansService } from '../../../../src/modules/loans/loans.service';
 import { ReputationService } from '../../../../src/modules/reputation/reputation.service';
 import { SupabaseService } from '../../../../src/database/supabase.client';
 import { CreditLineContractClient } from '../../../../src/blockchain/contracts/credit-line-contract.client';
+import { ReputationContractClient } from '../../../../src/blockchain/contracts/reputation-contract.client';
 
 describe('LoansService', () => {
   let service: LoansService;
@@ -33,6 +39,10 @@ describe('LoansService', () => {
     buildRepayLoanTx: jest.fn(),
   };
 
+  const mockReputationContractClient = {
+    getScore: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -40,6 +50,7 @@ describe('LoansService', () => {
         { provide: ReputationService, useValue: mockReputationService },
         { provide: SupabaseService, useValue: mockSupabaseService },
         { provide: CreditLineContractClient, useValue: mockCreditLineClient },
+        { provide: ReputationContractClient, useValue: mockReputationContractClient },
       ],
     }).compile();
 
@@ -277,6 +288,93 @@ describe('LoansService', () => {
         expect(() => new Date(payment.dueDate)).not.toThrow();
         expect(new Date(payment.dueDate).toISOString()).toBe(payment.dueDate);
       }
+    });
+  });
+
+  describe('getAvailableCredit', () => {
+    beforeEach(() => {
+      mockReputationContractClient.getScore.mockResolvedValue(75);
+    });
+
+    it('should calculate available credit from on-chain score and active loans', async () => {
+      mockSupabaseFrom.eq
+        .mockImplementationOnce(() => mockSupabaseFrom)
+        .mockResolvedValueOnce({
+          data: [{ remaining_balance: 400.25 }, { remaining_balance: 125.25 }],
+          error: null,
+        });
+
+      const result = await service.getAvailableCredit(validWallet);
+
+      expect(result).toEqual({
+        reputationScore: 75,
+        reputationTier: 'silver',
+        maxCreditLimit: 3000,
+        creditUsed: 525.5,
+        availableCredit: 2474.5,
+        activeLoans: 2,
+      });
+      expect(mockReputationContractClient.getScore).toHaveBeenCalledWith(validWallet);
+      expect(mockSupabaseClient.from).toHaveBeenCalledWith('loans');
+      expect(mockSupabaseFrom.select).toHaveBeenCalledWith('remaining_balance');
+    });
+
+    it('should treat missing on-chain score as zero reputation', async () => {
+      mockReputationContractClient.getScore.mockResolvedValue(null);
+      mockSupabaseFrom.eq
+        .mockImplementationOnce(() => mockSupabaseFrom)
+        .mockResolvedValueOnce({
+          data: [],
+          error: null,
+        });
+
+      const result = await service.getAvailableCredit(validWallet);
+
+      expect(result).toEqual({
+        reputationScore: 0,
+        reputationTier: 'poor',
+        maxCreditLimit: 500,
+        creditUsed: 0,
+        availableCredit: 500,
+        activeLoans: 0,
+      });
+    });
+
+    it('should never return negative available credit', async () => {
+      mockReputationContractClient.getScore.mockResolvedValue(60);
+      mockSupabaseFrom.eq
+        .mockImplementationOnce(() => mockSupabaseFrom)
+        .mockResolvedValueOnce({
+          data: [{ remaining_balance: 800 }, { remaining_balance: 900 }],
+          error: null,
+        });
+
+      const result = await service.getAvailableCredit(validWallet);
+
+      expect(result.availableCredit).toBe(0);
+      expect(result.creditUsed).toBe(1700);
+      expect(result.maxCreditLimit).toBe(1500);
+    });
+
+    it('should throw ServiceUnavailableException when blockchain lookup fails', async () => {
+      mockReputationContractClient.getScore.mockRejectedValue(new Error('rpc timeout'));
+
+      await expect(service.getAvailableCredit(validWallet)).rejects.toThrow(
+        ServiceUnavailableException,
+      );
+    });
+
+    it('should throw InternalServerErrorException when active loans query fails', async () => {
+      mockSupabaseFrom.eq
+        .mockImplementationOnce(() => mockSupabaseFrom)
+        .mockResolvedValueOnce({
+          data: null,
+          error: { message: 'db offline' },
+        });
+
+      await expect(service.getAvailableCredit(validWallet)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
   });
 });

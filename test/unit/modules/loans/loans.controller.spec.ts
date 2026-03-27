@@ -25,6 +25,7 @@ describe('LoansController', () => {
 
   const mockLoansService = {
     calculateLoanQuote: jest.fn(),
+    getAvailableCredit: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -84,6 +85,43 @@ describe('LoansController', () => {
       await expect(
         controller.getLoanQuote(user, validDto),
       ).rejects.toThrow('Reputation fetch failed');
+    });
+  });
+
+  describe('getAvailableCredit', () => {
+    const mockAvailableCreditResponse = {
+      reputationScore: 75,
+      reputationTier: 'silver' as const,
+      maxCreditLimit: 3000,
+      creditUsed: 825.5,
+      availableCredit: 2174.5,
+      activeLoans: 2,
+    };
+
+    it('should return the available credit wrapped in response envelope', async () => {
+      mockLoansService.getAvailableCredit.mockResolvedValue(mockAvailableCreditResponse);
+
+      const user = { wallet: validWallet };
+      const result = await controller.getAvailableCredit(user);
+
+      expect(result).toEqual({
+        success: true,
+        data: mockAvailableCreditResponse,
+        message: 'Available credit calculated successfully',
+      });
+      expect(loansService.getAvailableCredit).toHaveBeenCalledWith(validWallet);
+      expect(loansService.getAvailableCredit).toHaveBeenCalledTimes(1);
+    });
+
+    it('should propagate service errors to the caller', async () => {
+      mockLoansService.getAvailableCredit.mockRejectedValue(
+        new Error('Reputation contract unavailable'),
+      );
+
+      const user = { wallet: validWallet };
+      await expect(controller.getAvailableCredit(user)).rejects.toThrow(
+        'Reputation contract unavailable',
+      );
     });
   });
 });
