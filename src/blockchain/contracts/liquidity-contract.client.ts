@@ -3,33 +3,18 @@ import { ConfigService } from '@nestjs/config';
 import * as StellarSdk from 'stellar-sdk';
 import { SorobanService } from '../soroban/soroban.service';
 
+const STROOPS = 10_000_000n;
+const SHARE_PRICE_BPS = 10_000n;
+
 export interface PoolStats {
-  /** Total token balance in the pool (stroops) */
   totalLiquidity: bigint;
-  /** Tokens currently lent out and not yet repaid (stroops) */
   lockedLiquidity: bigint;
-  /** Tokens available for new loans (stroops) */
   availableLiquidity: bigint;
-  /** Total shares outstanding (stroops) */
   totalShares: bigint;
-  /**
-   * Share price in basis points: (total_liquidity × 10_000) / total_shares.
-   * 10_000 = par (1.00). 10_850 means each share is worth 1.085 tokens.
-   */
   sharePrice: bigint;
+  withdrawalFeeBps: bigint;
 }
 
-/**
- * TypeScript client for the on-chain LiquidityPool smart contract.
- *
- * Contract query methods (read-only, no signing required):
- *   - get_lp_shares(provider: Address) -> i128
- *   - get_pool_stats()                 -> PoolStats
- *   - calculate_withdrawal(shares: i128) -> i128
- *
- * All i128 amounts are in stroops (7 decimal places, divide by 10_000_000
- * to get human-readable token units).
- */
 @Injectable()
 export class LiquidityContractClient {
   private readonly logger = new Logger(LiquidityContractClient.name);
@@ -39,63 +24,41 @@ export class LiquidityContractClient {
     private readonly sorobanService: SorobanService,
     private readonly configService: ConfigService,
   ) {
-    this.contractId = this.configService.get<string>('LIQUIDITY_CONTRACT_ID') || '';
+    this.contractId =
+      this.configService.get<string>('LIQUIDITY_POOL_CONTRACT_ID') ||
+      this.configService.get<string>('LIQUIDITY_CONTRACT_ID') ||
+      '';
 
     if (this.contractId) {
       this.logger.log(`Liquidity contract loaded: ${this.contractId.slice(0, 8)}...`);
     } else {
-      this.logger.warn('LIQUIDITY_CONTRACT_ID is not set — contract calls will fail');
+      this.logger.warn('LIQUIDITY_POOL_CONTRACT_ID is not set - liquidity contract calls will fail');
     }
   }
 
-  /**
-   * Returns the raw share balance (i128 in stroops) for a liquidity provider.
-   * Calls `get_lp_shares(provider: Address) -> i128`.
-   *
-   * @param wallet - Stellar public key (G... format)
-   * @returns Shares in stroops (divide by 10_000_000 for human-readable units)
-   */
   async getLpShares(wallet: string): Promise<bigint> {
     this.ensureConfigured();
 
-    const addressArg = StellarSdk.nativeToScVal(
-      StellarSdk.Address.fromString(wallet),
-      { type: 'address' },
-    );
+    const addressArg = StellarSdk.nativeToScVal(StellarSdk.Address.fromString(wallet), {
+      type: 'address',
+    });
 
     try {
-      const result = await this.sorobanService.simulateContractCall(
-        this.contractId,
-        'get_lp_shares',
+      return await this.readBigInt(
+        ['get_lp_shares', 'get_provider_shares', 'provider_shares', 'get_shares', 'shares_of'],
         [addressArg],
+        'provider shares',
+        true,
       );
-
-      const raw = StellarSdk.scValToNative(result);
-      return raw !== undefined && raw !== null ? BigInt(raw) : 0n;
     } catch (error) {
-      // Contract returns an error when the wallet has no entry — treat as zero
-      if (
-        error.message?.includes('HostError') ||
-        error.message?.includes('Status(ContractError')
-      ) {
+      if (this.isMissingProviderError(error)) {
         this.logger.debug(`No LP shares for wallet ${wallet.slice(0, 8)}...`);
         return 0n;
       }
-      this.logger.error(`getLpShares failed for ${wallet.slice(0, 8)}...: ${error.message}`);
-      throw new ServiceUnavailableException({
-        code: 'BLOCKCHAIN_CONTRACT_UNAVAILABLE',
-        message: 'Liquidity contract is temporarily unavailable. Please try again later.',
-      });
+      throw error;
     }
   }
 
-  /**
-   * Returns aggregate pool statistics.
-   * Calls `get_pool_stats() -> PoolStats`.
-   *
-   * PoolStats fields (all i128 in stroops, except share_price in basis points):
-   *   total_liquidity, locked_liquidity, available_liquidity, total_shares, share_price
-   */
   async getPoolStats(): Promise<PoolStats> {
     this.ensureConfigured();
 
@@ -105,65 +68,212 @@ export class LiquidityContractClient {
         'get_pool_stats',
         [],
       );
-
-      // scValToNative converts the Soroban struct (ScMap) to a plain JS object
-      // with snake_case keys matching the Rust field names.
       const raw = StellarSdk.scValToNative(result) as Record<string, unknown>;
+      const totalLiquidity = this.toBigInt(raw['total_liquidity']);
+      const availableLiquidity = this.toBigInt(raw['available_liquidity']);
+      const totalShares = this.toBigInt(raw['total_shares']);
+      const lockedLiquidity =
+        raw['locked_liquidity'] !== undefined
+          ? this.toBigInt(raw['locked_liquidity'])
+          : totalLiquidity - availableLiquidity;
+      const sharePrice =
+        raw['share_price'] !== undefined
+          ? this.toBigInt(raw['share_price'])
+          : totalShares > 0n
+            ? (totalLiquidity * SHARE_PRICE_BPS) / totalShares
+            : 0n;
 
       return {
-        totalLiquidity: BigInt(raw['total_liquidity'] as string | number | bigint),
-        lockedLiquidity: BigInt(raw['locked_liquidity'] as string | number | bigint),
-        availableLiquidity: BigInt(raw['available_liquidity'] as string | number | bigint),
-        totalShares: BigInt(raw['total_shares'] as string | number | bigint),
-        sharePrice: BigInt(raw['share_price'] as string | number | bigint),
+        totalLiquidity,
+        lockedLiquidity,
+        availableLiquidity,
+        totalShares,
+        sharePrice,
+        withdrawalFeeBps: await this.getWithdrawalFeeBps(),
       };
     } catch (error) {
-      this.logger.error(`getPoolStats failed: ${error.message}`);
-      throw new ServiceUnavailableException({
-        code: 'BLOCKCHAIN_CONTRACT_UNAVAILABLE',
-        message: 'Liquidity contract is temporarily unavailable. Please try again later.',
-      });
+      this.logger.warn(`get_pool_stats unavailable, falling back to granular reads: ${error.message}`);
+
+      const [totalLiquidity, availableLiquidity, totalShares, withdrawalFeeBps] =
+        await Promise.all([
+          this.readBigInt(['get_total_liquidity', 'total_liquidity'], [], 'total liquidity'),
+          this.readBigInt(
+            ['get_available_liquidity', 'available_liquidity', 'liquid_assets'],
+            [],
+            'available liquidity',
+          ),
+          this.readBigInt(['get_total_shares', 'total_shares'], [], 'total shares'),
+          this.getWithdrawalFeeBps(),
+        ]);
+
+      const lockedLiquidity = totalLiquidity > availableLiquidity ? totalLiquidity - availableLiquidity : 0n;
+      const sharePrice = totalShares > 0n ? (totalLiquidity * SHARE_PRICE_BPS) / totalShares : 0n;
+
+      return {
+        totalLiquidity,
+        lockedLiquidity,
+        availableLiquidity,
+        totalShares,
+        sharePrice,
+        withdrawalFeeBps,
+      };
     }
   }
 
-  /**
-   * Calculates the token value of a given share amount at the current pool price.
-   * Calls `calculate_withdrawal(shares: i128) -> i128`.
-   *
-   * Formula (on-chain): `(shares × total_liquidity) / total_shares`
-   *
-   * @param sharesInStroops - Raw share amount in stroops (as returned by getLpShares)
-   * @returns Token value in stroops
-   */
   async calculateWithdrawal(sharesInStroops: bigint): Promise<bigint> {
     this.ensureConfigured();
 
     const sharesArg = StellarSdk.nativeToScVal(sharesInStroops, { type: 'i128' });
 
     try {
-      const result = await this.sorobanService.simulateContractCall(
-        this.contractId,
-        'calculate_withdrawal',
+      return await this.readBigInt(
+        ['calculate_withdrawal'],
         [sharesArg],
+        'withdrawal preview',
       );
-
-      const raw = StellarSdk.scValToNative(result);
-      return raw !== undefined && raw !== null ? BigInt(raw) : 0n;
     } catch (error) {
-      this.logger.error(`calculateWithdrawal failed: ${error.message}`);
+      this.logger.warn(`calculate_withdrawal unavailable, falling back to share-price math: ${error.message}`);
+      const stats = await this.getPoolStats();
+      if (stats.totalShares <= 0n) {
+        return 0n;
+      }
+      return (sharesInStroops * stats.totalLiquidity) / stats.totalShares;
+    }
+  }
+
+  async buildWithdrawTx(userWallet: string, sharesInStroops: bigint): Promise<string> {
+    this.ensureConfigured();
+
+    try {
+      const contract = new StellarSdk.Contract(this.contractId);
+      const server = this.sorobanService.getServer();
+      const networkPassphrase = this.sorobanService.getNetworkPassphrase();
+
+      const userArg = StellarSdk.nativeToScVal(StellarSdk.Address.fromString(userWallet), {
+        type: 'address',
+      });
+      const sharesArg = StellarSdk.nativeToScVal(sharesInStroops, { type: 'i128' });
+
+      const sourceKeypair = StellarSdk.Keypair.random();
+      const sourceAccount = new StellarSdk.Account(sourceKeypair.publicKey(), '0');
+
+      const tx = new StellarSdk.TransactionBuilder(sourceAccount, {
+        fee: StellarSdk.BASE_FEE,
+        networkPassphrase,
+      })
+        .addOperation(contract.call('withdraw', userArg, sharesArg))
+        .setTimeout(300)
+        .build();
+
+      const simulation = await server.simulateTransaction(tx);
+
+      if (StellarSdk.SorobanRpc.Api.isSimulationError(simulation)) {
+        const errorMsg =
+          (simulation as StellarSdk.SorobanRpc.Api.SimulateTransactionErrorResponse).error ||
+          'Unknown simulation error';
+        this.logger.error(`withdraw simulation failed: ${errorMsg}`);
+        throw new ServiceUnavailableException({
+          code: 'BLOCKCHAIN_SIMULATION_FAILED',
+          message: 'Failed to simulate liquidity withdrawal transaction. Please try again later.',
+        });
+      }
+
+      const assembledTx = StellarSdk.SorobanRpc.assembleTransaction(
+        tx,
+        simulation as StellarSdk.SorobanRpc.Api.SimulateTransactionSuccessResponse,
+      ).build();
+
+      return assembledTx.toXDR();
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) {
+        throw error;
+      }
+
+      this.logger.error(`Failed to build withdraw transaction: ${error.message}`);
       throw new ServiceUnavailableException({
-        code: 'BLOCKCHAIN_CONTRACT_UNAVAILABLE',
-        message: 'Liquidity contract is temporarily unavailable. Please try again later.',
+        code: 'BLOCKCHAIN_TX_BUILD_FAILED',
+        message: 'Failed to construct liquidity withdrawal transaction. Please try again later.',
       });
     }
+  }
+
+  private async getWithdrawalFeeBps(): Promise<bigint> {
+    const methods = ['get_withdrawal_fee_bps', 'withdrawal_fee_bps', 'get_withdraw_fee_bps'];
+
+    for (const method of methods) {
+      try {
+        return await this.readBigInt([method], [], 'withdrawal fee', true);
+      } catch {
+        // try next name
+      }
+    }
+
+    this.logger.warn('Withdrawal fee method not available on contract; defaulting fee to 0 bps');
+    return 0n;
+  }
+
+  private async readBigInt(
+    methods: string[],
+    args: StellarSdk.xdr.ScVal[],
+    label: string,
+    allowContractError = false,
+  ): Promise<bigint> {
+    let lastError: unknown;
+
+    for (const method of methods) {
+      try {
+        const result = await this.sorobanService.simulateContractCall(this.contractId, method, args);
+        return this.toBigInt(StellarSdk.scValToNative(result));
+      } catch (error) {
+        lastError = error;
+        if (allowContractError && this.isMissingProviderError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    this.logger.error(`Failed to read ${label} from liquidity contract`, lastError as Error);
+    throw new ServiceUnavailableException({
+      code: 'BLOCKCHAIN_CONTRACT_READ_FAILED',
+      message: `Failed to read ${label} from the liquidity pool contract. Please try again later.`,
+    });
   }
 
   private ensureConfigured(): void {
     if (!this.contractId) {
       throw new ServiceUnavailableException({
         code: 'BLOCKCHAIN_CONTRACT_NOT_CONFIGURED',
-        message: 'Liquidity contract is not configured. Please contact support.',
+        message: 'Liquidity pool contract is not configured. Please contact support.',
       });
     }
+  }
+
+  private isMissingProviderError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      message.includes('HostError') ||
+      message.includes('Status(ContractError') ||
+      message.includes('Error(Contract')
+    );
+  }
+
+  private toBigInt(value: unknown): bigint {
+    if (typeof value === 'bigint') {
+      return value;
+    }
+
+    if (typeof value === 'number') {
+      return BigInt(Math.round(value));
+    }
+
+    if (typeof value === 'string') {
+      return BigInt(value);
+    }
+
+    if (value && typeof value === 'object' && 'toString' in (value as object)) {
+      return BigInt(String(value));
+    }
+
+    throw new Error(`Unsupported contract numeric value: ${String(value)}`);
   }
 }

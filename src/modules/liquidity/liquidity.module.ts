@@ -23,12 +23,7 @@ import { LiquidityContractClient } from '../../blockchain/contracts/liquidity-co
     }),
   ],
   controllers: [LiquidityController],
-  providers: [
-    LiquidityService,
-    SupabaseService,
-    SorobanService,
-    LiquidityContractClient,
-  ],
+  providers: [LiquidityService, SupabaseService, SorobanService, LiquidityContractClient],
   exports: [LiquidityService],
 })
 export class LiquidityModule {}
