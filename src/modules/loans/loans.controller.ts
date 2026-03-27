@@ -1,5 +1,6 @@
 import {
   Controller,
+  Get,
   Post,
   Body,
   Param,
@@ -22,6 +23,7 @@ import { CreateLoanRequestDto } from './dto/create-loan-request.dto';
 import { CreateLoanResponseDto } from './dto/create-loan-response.dto';
 import { LoanPaymentRequestDto } from './dto/loan-payment-request.dto';
 import { LoanPaymentResponseDto } from './dto/loan-payment-response.dto';
+import { AvailableCreditResponseDto } from './dto/available-credit-response.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
@@ -53,6 +55,26 @@ export class LoansController {
   ) {
     const data = await this.loansService.calculateLoanQuote(user.wallet, dto);
     return { success: true, data, message: 'Loan quote calculated successfully' };
+  }
+
+  @Get('available-credit')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get available credit for the authenticated user',
+    description:
+      'Reads the current reputation score from the reputation contract, sums outstanding balances from active loans, and returns the user borrowing capacity breakdown.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Available credit calculated successfully',
+    type: AvailableCreditResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized - missing or invalid JWT' })
+  @ApiResponse({ status: 503, description: 'Reputation contract temporarily unavailable' })
+  async getAvailableCredit(@CurrentUser() user: { wallet: string }) {
+    const data = await this.loansService.getAvailableCredit(user.wallet);
+    return { success: true, data, message: 'Available credit calculated successfully' };
   }
 
   @Post('create')

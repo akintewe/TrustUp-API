@@ -4,16 +4,20 @@ import {
   NotFoundException,
   Logger,
   InternalServerErrorException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ReputationService } from '../reputation/reputation.service';
 import { SupabaseService } from '../../database/supabase.client';
 import { CreditLineContractClient } from '../../blockchain/contracts/credit-line-contract.client';
+import { ReputationContractClient } from '../../blockchain/contracts/reputation-contract.client';
 import { LoanQuoteRequestDto } from './dto/loan-quote-request.dto';
 import { LoanQuoteResponseDto, SchedulePaymentDto } from './dto/loan-quote-response.dto';
 import { CreateLoanRequestDto } from './dto/create-loan-request.dto';
 import { CreateLoanResponseDto } from './dto/create-loan-response.dto';
 import { LoanPaymentRequestDto } from './dto/loan-payment-request.dto';
 import { LoanPaymentResponseDto } from './dto/loan-payment-response.dto';
+import { AvailableCreditResponseDto } from './dto/available-credit-response.dto';
+import { ReputationTier } from '../reputation/dto/reputation-response.dto';
 
 const GUARANTEE_PERCENT = 0.2;
 const LOAN_PERCENT = 0.8;
@@ -48,6 +52,7 @@ export class LoansService {
     private readonly reputationService: ReputationService,
     private readonly supabaseService: SupabaseService,
     private readonly creditLineContractClient: CreditLineContractClient,
+    private readonly reputationContractClient: ReputationContractClient,
   ) {}
 
   async calculateLoanQuote(
@@ -174,6 +179,50 @@ export class LoansService {
     };
   }
 
+  async getAvailableCredit(wallet: string): Promise<AvailableCreditResponseDto> {
+    let reputationScore: number;
+
+    try {
+      reputationScore = (await this.reputationContractClient.getScore(wallet)) ?? 0;
+    } catch (error) {
+      this.logger.error(`Failed to fetch reputation score for ${wallet}: ${error.message}`);
+      throw new ServiceUnavailableException({
+        code: 'REPUTATION_CONTRACT_UNAVAILABLE',
+        message: 'Unable to read the reputation contract right now. Please try again later.',
+      });
+    }
+
+    const { maxCredit, tier } = this.mapScoreToCreditTier(reputationScore);
+
+    const client = this.supabaseService.getServiceRoleClient();
+    const { data: activeLoans, error } = await client
+      .from('loans')
+      .select('remaining_balance')
+      .eq('user_wallet', wallet)
+      .eq('status', 'active');
+
+    if (error) {
+      throw new InternalServerErrorException({
+        code: 'ACTIVE_LOANS_QUERY_FAILED',
+        message: 'Failed to calculate active loan utilization.',
+      });
+    }
+
+    const creditUsed = Math.round(
+      (activeLoans ?? []).reduce((sum, loan) => sum + Number(loan.remaining_balance ?? 0), 0) * 100,
+    ) / 100;
+    const availableCredit = Math.max(0, Math.round((maxCredit - creditUsed) * 100) / 100);
+
+    return {
+      reputationScore,
+      reputationTier: tier,
+      maxCreditLimit: maxCredit,
+      creditUsed,
+      availableCredit,
+      activeLoans: activeLoans?.length ?? 0,
+    };
+  }
+
   private async prepareLoanPreview(
     wallet: string,
     dto: LoanQuoteRequestDto,
@@ -282,5 +331,24 @@ export class LoansService {
     }
 
     return schedule;
+  }
+
+  private mapScoreToCreditTier(score: number): {
+    tier: ReputationTier;
+    maxCredit: number;
+  } {
+    if (score >= 90) {
+      return { tier: 'gold', maxCredit: 5000 };
+    }
+
+    if (score >= 75) {
+      return { tier: 'silver', maxCredit: 3000 };
+    }
+
+    if (score >= 60) {
+      return { tier: 'bronze', maxCredit: 1500 };
+    }
+
+    return { tier: 'poor', maxCredit: 500 };
   }
 }

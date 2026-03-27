@@ -6,6 +6,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { SupabaseService } from '../../database/supabase.client';
+import { UsersRepository } from '../../database/repositories/users.repository';
 import { getJwtConfig } from '../../config/jwt.config';
 
 @Module({
@@ -18,7 +19,7 @@ import { getJwtConfig } from '../../config/jwt.config';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, SupabaseService, ConfigService],
+  providers: [AuthService, JwtStrategy, SupabaseService, ConfigService, UsersRepository],
   exports: [AuthService, JwtStrategy, PassportModule],
 })
 export class AuthModule {}
