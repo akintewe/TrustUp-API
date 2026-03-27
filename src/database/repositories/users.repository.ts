@@ -11,6 +11,7 @@ export interface UserPreferencesRecord {
 export interface UserRecord {
     id: string;
     wallet_address: string;
+    username?: string | null;
     display_name: string | null;
     avatar_url: string | null;
     status: 'active' | 'blocked';
@@ -41,7 +42,7 @@ export class UsersRepository {
             .getServiceRoleClient()
             .from('users')
             .select(
-                'id, wallet_address, display_name, avatar_url, status, created_at, user_preferences(notifications_enabled, language, theme)',
+                'id, wallet_address, username, display_name, avatar_url, status, created_at, user_preferences(notifications_enabled, language, theme)',
             )
             .eq('wallet_address', wallet)
             .maybeSingle();
@@ -74,7 +75,7 @@ export class UsersRepository {
             .getServiceRoleClient()
             .from('users')
             .insert({ wallet_address: wallet })
-            .select('id, wallet_address, display_name, avatar_url, status, created_at')
+            .select('id, wallet_address, username, display_name, avatar_url, status, created_at')
             .single();
 
         if (error) {
@@ -160,5 +161,72 @@ export class UsersRepository {
         }
 
         return user as { wallet_address: string; display_name: string | null; avatar_url: string | null; updated_at: string; id: string };
+    }
+
+    // --- REGISTRATION METHODS ---
+
+    async checkUsernameExists(username: string): Promise<boolean> {
+        const { data, error } = await this.supabaseService
+            .getServiceRoleClient()
+            .from('users')
+            .select('id')
+            .eq('username', username)
+            .maybeSingle();
+
+        if (error) {
+            throw new InternalServerErrorException({
+                code: 'DATABASE_QUERY_ERROR',
+                message: error.message,
+            });
+        }
+        return !!data;
+    }
+
+    async createProfile(data: { wallet: string; username: string; displayName: string; avatarUrl: string | null }): Promise<UserRecord> {
+        const { data: user, error } = await this.supabaseService
+            .getServiceRoleClient()
+            .from('users')
+            .insert({
+                wallet_address: data.wallet,
+                username: data.username,
+                display_name: data.displayName,
+                avatar_url: data.avatarUrl,
+                status: 'active',
+            })
+            .select('id, wallet_address, username, display_name, avatar_url, status, created_at')
+            .single();
+
+        if (error) {
+            throw new InternalServerErrorException({
+                code: 'DATABASE_INSERT_ERROR',
+                message: `Failed to create user profile: ${error.message}`,
+            });
+        }
+
+        return { ...(user as Omit<UserRecord, 'user_preferences'>), user_preferences: null };
+    }
+
+    async uploadAvatar(walletAddress: string, file: any): Promise<string> {
+        const fileExt = file.originalname.split('.').pop();
+        const fileName = `${walletAddress}-${Date.now()}.${fileExt}`;
+        const client = this.supabaseService.getServiceRoleClient();
+
+        const { error } = await client
+            .storage
+            .from('avatars')
+            .upload(fileName, file.buffer, {
+                contentType: file.mimetype,
+                upsert: true,
+            });
+
+        if (error) {
+            throw new InternalServerErrorException({
+                code: 'STORAGE_UPLOAD_FAILED',
+                message: `Failed to upload avatar: ${error.message}`,
+            });
+        }
+
+        const { data } = client.storage.from('avatars').getPublicUrl(fileName);
+        return data.publicUrl;
     }
 }

@@ -9,6 +9,7 @@ import { LoansModule } from './modules/loans/loans.module';
 import { ReputationModule } from './modules/reputation/reputation.module';
 import { UsersModule } from './modules/users/users.module';
 import { MerchantsModule } from './modules/merchants/merchants.module';
+import { LiquidityModule } from './modules/liquidity/liquidity.module';
 import { BlockchainIndexerModule } from './jobs/blockchain-indexer/blockchain-indexer.module';
 
 @Module({
@@ -36,6 +37,7 @@ import { BlockchainIndexerModule } from './jobs/blockchain-indexer/blockchain-in
     ReputationModule,
     UsersModule,
     MerchantsModule,
+    LiquidityModule,
     BlockchainIndexerModule,
   ],
   controllers: [],

@@ -1,16 +1,61 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { 
+  Controller, 
+  Post, 
+  Body, 
+  HttpCode, 
+  HttpStatus, 
+  UseInterceptors, 
+  UploadedFile, 
+  ParseFilePipe, 
+  MaxFileSizeValidator, 
+  FileTypeValidator 
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { NonceRequestDto } from './dto/nonce-request.dto';
 import { NonceResponseDto } from './dto/nonce-response.dto';
 import { VerifyRequestDto } from './dto/verify-request.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
+import { RegisterRequestDto } from './dto/register-request.dto';
 
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({
+    summary: 'Register a new user account with complete profile',
+    description: 'Creates a new user account. Accepts multipart/form-data with wallet address, username, display name, terms acceptance, and an optional profile image (max 2MB, JPEG/PNG/WebP). Issues JWT tokens immediately on success.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: RegisterRequestDto })
+  @ApiResponse({
+    status: 201,
+    description: 'User successfully registered and authenticated',
+  })
+  @ApiResponse({ status: 400, description: 'Validation failed or invalid image upload format/size' })
+  @ApiResponse({ status: 409, description: 'Wallet address or username already exists' })
+  @UseInterceptors(FileInterceptor('profileImage'))
+  async register(
+    @Body() dto: RegisterRequestDto,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 2 * 1024 * 1024 }), // 2MB restriction
+          new FileTypeValidator({ fileType: /(jpg|jpeg|png|webp)$/i }), // Format restriction
+        ],
+        fileIsRequired: false,
+      }),
+    )
+    profileImage?: any,
+  ): Promise<any> {
+    return this.authService.register(dto, profileImage);
+  }
 
   @Post('nonce')
   @HttpCode(HttpStatus.CREATED)
