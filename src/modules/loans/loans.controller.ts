@@ -19,6 +19,8 @@ import {
 import { LoansService } from './loans.service';
 import { LoanQuoteRequestDto } from './dto/loan-quote-request.dto';
 import { LoanQuoteResponseDto } from './dto/loan-quote-response.dto';
+import { CreateLoanRequestDto } from './dto/create-loan-request.dto';
+import { CreateLoanResponseDto } from './dto/create-loan-response.dto';
 import { LoanPaymentRequestDto } from './dto/loan-payment-request.dto';
 import { LoanPaymentResponseDto } from './dto/loan-payment-response.dto';
 import { AvailableCreditResponseDto } from './dto/available-credit-response.dto';
@@ -45,7 +47,7 @@ export class LoansController {
     type: LoanQuoteResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Invalid input or amount exceeds credit limit' })
-  @ApiResponse({ status: 401, description: 'Unauthorized — missing or invalid JWT' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - missing or invalid JWT' })
   @ApiResponse({ status: 404, description: 'Merchant not found' })
   async getLoanQuote(
     @CurrentUser() user: { wallet: string },
@@ -68,11 +70,40 @@ export class LoansController {
     description: 'Available credit calculated successfully',
     type: AvailableCreditResponseDto,
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized â€” missing or invalid JWT' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - missing or invalid JWT' })
   @ApiResponse({ status: 503, description: 'Reputation contract temporarily unavailable' })
   async getAvailableCredit(@CurrentUser() user: { wallet: string }) {
     const data = await this.loansService.getAvailableCredit(user.wallet);
     return { success: true, data, message: 'Available credit calculated successfully' };
+  }
+
+  @Post('create')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Create BNPL loan',
+    description:
+      'Creates a pending BNPL loan record and returns an unsigned Soroban XDR transaction for the authenticated user to sign.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Pending loan created and unsigned transaction generated successfully',
+    type: CreateLoanResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid input, insufficient reputation, or amount exceeds credit limit',
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized - missing or invalid JWT' })
+  @ApiResponse({ status: 404, description: 'Merchant not found' })
+  @ApiResponse({ status: 500, description: 'Failed to construct XDR or persist pending loan' })
+  async createLoan(
+    @CurrentUser() user: { wallet: string },
+    @Body() dto: CreateLoanRequestDto,
+  ) {
+    const data = await this.loansService.createLoan(user.wallet, dto);
+    return { success: true, data, message: 'Pending loan created successfully' };
   }
 
   @Post(':loanId/pay')
@@ -95,8 +126,11 @@ export class LoansController {
     type: LoanPaymentResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Invalid payment amount or loan not active' })
-  @ApiResponse({ status: 401, description: 'Unauthorized — missing or invalid JWT' })
-  @ApiResponse({ status: 404, description: 'Loan not found or does not belong to authenticated user' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - missing or invalid JWT' })
+  @ApiResponse({
+    status: 404,
+    description: 'Loan not found or does not belong to authenticated user',
+  })
   @ApiResponse({ status: 503, description: 'Blockchain contract unavailable' })
   async repayLoan(
     @CurrentUser() user: { wallet: string },
@@ -107,4 +141,3 @@ export class LoansController {
     return { success: true, data, message: 'Repayment transaction constructed successfully' };
   }
 }
-

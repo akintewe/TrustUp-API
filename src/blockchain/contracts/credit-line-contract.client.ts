@@ -3,14 +3,19 @@ import { ConfigService } from '@nestjs/config';
 import * as StellarSdk from 'stellar-sdk';
 import { SorobanService } from '../soroban/soroban.service';
 
+interface CreateLoanParams {
+  loanId: string;
+  merchantId: string;
+  amount: number;
+  loanAmount: number;
+  guarantee: number;
+  interestRate: number;
+  term: number;
+}
+
 /**
  * TypeScript client for the on-chain CreditLine smart contract.
- * Encapsulates transaction-building for loan repayment operations.
- *
- * Follows the unsigned XDR pattern:
- *  1. API builds unsigned XDR via buildRepayLoanTx()
- *  2. Mobile app signs the transaction
- *  3. Mobile app submits the signed XDR back to the API
+ * Encapsulates transaction-building for loan creation and repayment operations.
  */
 @Injectable()
 export class CreditLineContractClient {
@@ -21,32 +26,61 @@ export class CreditLineContractClient {
     private readonly sorobanService: SorobanService,
     private readonly configService: ConfigService,
   ) {
-    this.contractId = this.configService.get<string>('CREDIT_LINE_CONTRACT_ID') || '';
+    this.contractId =
+      this.configService.get<string>('CREDIT_LINE_CONTRACT_ID') ||
+      this.configService.get<string>('CREDITLINE_CONTRACT_ID') ||
+      '';
 
     if (this.contractId) {
       this.logger.log(`CreditLine contract loaded: ${this.contractId.slice(0, 8)}...`);
     } else {
-      this.logger.warn('CREDIT_LINE_CONTRACT_ID is not set — contract calls will fail');
+      this.logger.warn('CREDIT_LINE_CONTRACT_ID is not set - contract calls will fail');
     }
+  }
+
+  async buildCreateLoanTransaction(
+    borrowerWallet: string,
+    params: CreateLoanParams,
+  ): Promise<string> {
+    if (!this.contractId) {
+      throw new Error('CREDIT_LINE_CONTRACT_ID is not configured');
+    }
+
+    const contract = new StellarSdk.Contract(this.contractId);
+    const server = this.sorobanService.getServer();
+    const networkPassphrase = this.sorobanService.getNetworkPassphrase();
+    const sourceAccount = await server.getAccount(borrowerWallet);
+    const amount = this.toContractAmount(params.amount);
+    const loanAmount = this.toContractAmount(params.loanAmount);
+    const guarantee = this.toContractAmount(params.guarantee);
+
+    const tx = new StellarSdk.TransactionBuilder(sourceAccount, {
+      fee: '100',
+      networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          'create_loan',
+          StellarSdk.nativeToScVal(params.loanId, { type: 'string' }),
+          StellarSdk.nativeToScVal(params.merchantId, { type: 'string' }),
+          StellarSdk.nativeToScVal(amount, { type: 'i128' }),
+          StellarSdk.nativeToScVal(loanAmount, { type: 'i128' }),
+          StellarSdk.nativeToScVal(guarantee, { type: 'i128' }),
+          StellarSdk.nativeToScVal(params.interestRate, { type: 'u32' }),
+          StellarSdk.nativeToScVal(params.term, { type: 'u32' }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await server.prepareTransaction(tx);
+    return prepared.toXDR();
   }
 
   /**
    * Builds an unsigned XDR transaction that calls repay_loan() on-chain.
-   *
-   * The transaction is NOT submitted — it is returned to the mobile app
-   * for signing. The mobile app signs with the user's private key and
-   * submits the signed XDR back via the submit endpoint.
-   *
-   * @param userWallet  - Borrower's Stellar public key (G... format)
-   * @param loanId      - On-chain loan identifier
-   * @param amount      - Payment amount in stroops (1 XLM = 10_000_000 stroops)
-   * @returns Base64-encoded unsigned XDR transaction envelope
    */
-  async buildRepayLoanTx(
-    userWallet: string,
-    loanId: string,
-    amount: number,
-  ): Promise<string> {
+  async buildRepayLoanTx(userWallet: string, loanId: string, amount: number): Promise<string> {
     if (!this.contractId) {
       throw new ServiceUnavailableException({
         code: 'BLOCKCHAIN_CONTRACT_NOT_CONFIGURED',
@@ -58,19 +92,13 @@ export class CreditLineContractClient {
       const contract = new StellarSdk.Contract(this.contractId);
       const server = this.sorobanService.getServer();
       const networkPassphrase = this.sorobanService.getNetworkPassphrase();
-
-      // Build args: repay_loan(user: Address, loan_id: String, amount: i128)
-      const userArg = StellarSdk.nativeToScVal(
-        StellarSdk.Address.fromString(userWallet),
-        { type: 'address' },
-      );
+      const userArg = StellarSdk.nativeToScVal(StellarSdk.Address.fromString(userWallet), {
+        type: 'address',
+      });
       const loanIdArg = StellarSdk.nativeToScVal(loanId, { type: 'string' });
-      // Convert USD amount to stroops (7 decimal places, DECIMAL(20,7) in DB)
       const amountInStroops = BigInt(Math.round(amount * 10_000_000));
       const amountArg = StellarSdk.nativeToScVal(amountInStroops, { type: 'i128' });
 
-      // Use a throwaway account to build the transaction; the real user wallet
-      // is passed as the `user` argument inside the contract call
       const sourceKeypair = StellarSdk.Keypair.random();
       const sourceAccount = new StellarSdk.Account(sourceKeypair.publicKey(), '0');
 
@@ -82,7 +110,6 @@ export class CreditLineContractClient {
         .setTimeout(300)
         .build();
 
-      // Simulate to get the resource fee and footprint, then assemble
       const simulation = await server.simulateTransaction(tx);
 
       if (StellarSdk.SorobanRpc.Api.isSimulationError(simulation)) {
@@ -112,5 +139,9 @@ export class CreditLineContractClient {
         message: 'Failed to construct repayment transaction. Please try again later.',
       });
     }
+  }
+
+  private toContractAmount(value: number): bigint {
+    return BigInt(Math.round(value * 100));
   }
 }

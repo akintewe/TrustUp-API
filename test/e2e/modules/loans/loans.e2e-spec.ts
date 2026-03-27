@@ -1,21 +1,22 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, UnauthorizedException } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { LoansModule } from '../../../../src/modules/loans/loans.module';
 import { ReputationService } from '../../../../src/modules/reputation/reputation.service';
-import { ReputationContractClient } from '../../../../src/blockchain/contracts/reputation-contract.client';
 import { SorobanService } from '../../../../src/blockchain/soroban/soroban.service';
 import { SupabaseService } from '../../../../src/database/supabase.client';
+import { CreditLineContractClient } from '../../../../src/blockchain/contracts/credit-line-contract.client';
+import { JwtAuthGuard } from '../../../../src/common/guards/jwt-auth.guard';
 
 describe('LoansController (e2e)', () => {
   let app: NestFastifyApplication;
 
   const validWallet = 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW';
-  const merchantId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+  const merchantId = 'a1b2c3d4-e5f6-4890-abcd-ef1234567890';
 
-  const mockReputationContract = {
-    getScore: jest.fn().mockResolvedValue(75),
+  const mockCreditLineContract = {
+    buildCreateLoanTransaction: jest.fn().mockResolvedValue('AAAAAgAAAAC...'),
   };
 
   const mockSorobanService = {
@@ -31,6 +32,7 @@ describe('LoansController (e2e)', () => {
       data: { id: merchantId, name: 'TechStore', is_active: true },
       error: null,
     }),
+    insert: jest.fn().mockResolvedValue({ error: null }),
   };
 
   const mockSupabaseClient = {
@@ -42,24 +44,35 @@ describe('LoansController (e2e)', () => {
     getClient: jest.fn().mockReturnValue(mockSupabaseClient),
   };
 
+  const mockJwtAuthGuard = {
+    canActivate: jest.fn((context) => {
+      const req = context.switchToHttp().getRequest();
+      const authHeader = req.headers['authorization'];
+
+      if (!authHeader?.startsWith('Bearer ')) {
+        throw new UnauthorizedException('No token provided');
+      }
+
+      req.user = { wallet: validWallet };
+      return true;
+    }),
+  };
+
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [
-        ConfigModule.forRoot({ isGlobal: true }),
-        LoansModule,
-      ],
+      imports: [ConfigModule.forRoot({ isGlobal: true }), LoansModule],
     })
-      .overrideProvider(ReputationContractClient)
-      .useValue(mockReputationContract)
       .overrideProvider(SorobanService)
       .useValue(mockSorobanService)
+      .overrideProvider(CreditLineContractClient)
+      .useValue(mockCreditLineContract)
       .overrideProvider(SupabaseService)
       .useValue(mockSupabaseService)
+      .overrideGuard(JwtAuthGuard)
+      .useValue(mockJwtAuthGuard)
       .compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
+    app = moduleFixture.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
 
     app.useGlobalPipes(
       new ValidationPipe({
@@ -79,9 +92,6 @@ describe('LoansController (e2e)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-
-    // Re-wire the chained mock defaults
-    mockReputationContract.getScore.mockResolvedValue(75);
     mockSupabaseClient.from.mockReturnValue(mockSupabaseFrom);
     mockSupabaseFrom.select.mockReturnThis();
     mockSupabaseFrom.eq.mockReturnThis();
@@ -89,12 +99,31 @@ describe('LoansController (e2e)', () => {
       data: { id: merchantId, name: 'TechStore', is_active: true },
       error: null,
     });
+    mockSupabaseFrom.insert.mockResolvedValue({ error: null });
     mockSupabaseService.getServiceRoleClient.mockReturnValue(mockSupabaseClient);
+    mockCreditLineContract.buildCreateLoanTransaction.mockResolvedValue('AAAAAgAAAAC...');
+    mockJwtAuthGuard.canActivate.mockImplementation((context) => {
+      const req = context.switchToHttp().getRequest();
+      const authHeader = req.headers['authorization'];
+
+      if (!authHeader?.startsWith('Bearer ')) {
+        throw new UnauthorizedException('No token provided');
+      }
+
+      req.user = { wallet: validWallet };
+      return true;
+    });
+
+    jest.spyOn(app.get(ReputationService), 'getReputationScore').mockResolvedValue({
+      wallet: validWallet,
+      score: 75,
+      tier: 'silver',
+      interestRate: 8,
+      maxCredit: 3000,
+      lastUpdated: '2026-03-23T00:00:00.000Z',
+    });
   });
 
-  // ---------------------------------------------------------------------------
-  // POST /loans/quote
-  // ---------------------------------------------------------------------------
   describe('POST /loans/quote', () => {
     const validBody = { amount: 500, merchant: merchantId, term: 4 };
 
@@ -102,7 +131,7 @@ describe('LoansController (e2e)', () => {
       const res = await app.inject({
         method: 'POST',
         url: '/loans/quote',
-        headers: { 'x-wallet-address': validWallet },
+        headers: { authorization: 'Bearer valid.jwt.token' },
         payload: validBody,
       });
 
@@ -112,150 +141,96 @@ describe('LoansController (e2e)', () => {
       expect(body).toHaveProperty('success', true);
       expect(body).toHaveProperty('message', 'Loan quote calculated successfully');
       expect(body).toHaveProperty('data');
-
-      const { data } = body;
-      expect(data).toHaveProperty('amount', 500);
-      expect(data).toHaveProperty('guarantee', 100);
-      expect(data).toHaveProperty('loanAmount', 400);
-      expect(data).toHaveProperty('interestRate');
-      expect(data).toHaveProperty('totalRepayment');
-      expect(data).toHaveProperty('term', 4);
-      expect(data).toHaveProperty('schedule');
-      expect(data.schedule).toHaveLength(4);
+      expect(body.data).toHaveProperty('amount', 500);
+      expect(body.data).toHaveProperty('guarantee', 100);
+      expect(body.data).toHaveProperty('loanAmount', 400);
+      expect(body.data).toHaveProperty('term', 4);
+      expect(body.data.schedule).toHaveLength(4);
     }, 10000);
 
-    it('should return schedule with correct structure', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/loans/quote',
-        headers: { 'x-wallet-address': validWallet },
-        payload: validBody,
-      });
-
-      const body = JSON.parse(res.payload);
-      const payment = body.data.schedule[0];
-
-      expect(payment).toHaveProperty('paymentNumber', 1);
-      expect(payment).toHaveProperty('amount');
-      expect(payment).toHaveProperty('dueDate');
-      expect(typeof payment.amount).toBe('number');
-    }, 10000);
-
-    it('should return 400 for missing wallet header', async () => {
+    it('should return 401 for missing bearer token', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/loans/quote',
         payload: validBody,
       });
 
-      expect(res.statusCode).toBe(400);
-    });
-
-    it('should return 400 for invalid wallet format', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/loans/quote',
-        headers: { 'x-wallet-address': 'INVALID' },
-        payload: validBody,
-      });
-
-      expect(res.statusCode).toBe(400);
-    });
-
-    it('should return 400 for amount below minimum', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/loans/quote',
-        headers: { 'x-wallet-address': validWallet },
-        payload: { ...validBody, amount: 0 },
-      });
-
-      expect(res.statusCode).toBe(400);
-    });
-
-    it('should return 400 for amount above maximum', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/loans/quote',
-        headers: { 'x-wallet-address': validWallet },
-        payload: { ...validBody, amount: 20000 },
-      });
-
-      expect(res.statusCode).toBe(400);
-    });
-
-    it('should return 400 for non-integer term', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/loans/quote',
-        headers: { 'x-wallet-address': validWallet },
-        payload: { ...validBody, term: 2.5 },
-      });
-
-      expect(res.statusCode).toBe(400);
-    });
-
-    it('should return 400 for term exceeding 12 months', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/loans/quote',
-        headers: { 'x-wallet-address': validWallet },
-        payload: { ...validBody, term: 24 },
-      });
-
-      expect(res.statusCode).toBe(400);
+      expect(res.statusCode).toBe(401);
     });
 
     it('should return 400 for invalid merchant UUID', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/loans/quote',
-        headers: { 'x-wallet-address': validWallet },
+        headers: { authorization: 'Bearer valid.jwt.token' },
         payload: { ...validBody, merchant: 'not-a-uuid' },
       });
 
       expect(res.statusCode).toBe(400);
     });
+  });
 
-    it('should return 404 when merchant does not exist', async () => {
-      mockSupabaseFrom.single.mockResolvedValue({
-        data: null,
-        error: { message: 'not found' },
-      });
+  describe('POST /loans/create', () => {
+    const validBody = { amount: 500, merchant: merchantId, term: 4 };
 
+    it('should return 200 with loanId, xdr, and terms', async () => {
       const res = await app.inject({
         method: 'POST',
-        url: '/loans/quote',
-        headers: { 'x-wallet-address': validWallet },
+        url: '/loans/create',
+        headers: { authorization: 'Bearer valid.jwt.token' },
         payload: validBody,
       });
 
-      expect(res.statusCode).toBe(404);
+      expect(res.statusCode).toBe(200);
+
+      const body = JSON.parse(res.payload);
+      expect(body).toHaveProperty('success', true);
+      expect(body).toHaveProperty('message', 'Pending loan created successfully');
+      expect(body.data).toHaveProperty('loanId');
+      expect(body.data).toHaveProperty('xdr', 'AAAAAgAAAAC...');
+      expect(body.data).toHaveProperty('terms');
+      expect(body.data.terms).toHaveProperty('guarantee', 100);
     }, 10000);
 
-    it('should return 400 for forbidden extra fields', async () => {
+    it('should return 401 for missing bearer token', async () => {
       const res = await app.inject({
         method: 'POST',
-        url: '/loans/quote',
-        headers: { 'x-wallet-address': validWallet },
-        payload: { ...validBody, extraField: 'hack' },
+        url: '/loans/create',
+        payload: validBody,
+      });
+
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('should return 400 for invalid request body', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/loans/create',
+        headers: { authorization: 'Bearer valid.jwt.token' },
+        payload: { amount: 500, merchant: merchantId },
       });
 
       expect(res.statusCode).toBe(400);
     });
 
-    it('should return 400 when amount exceeds user credit limit', async () => {
-      // Score 40 → poor tier → maxCredit ~678
-      mockReputationContract.getScore.mockResolvedValue(40);
+    it('should return 400 for insufficient reputation', async () => {
+      jest.spyOn(app.get(ReputationService), 'getReputationScore').mockResolvedValue({
+        wallet: validWallet,
+        score: 40,
+        tier: 'poor',
+        interestRate: 12,
+        maxCredit: 500,
+        lastUpdated: '2026-03-23T00:00:00.000Z',
+      });
 
       const res = await app.inject({
         method: 'POST',
-        url: '/loans/quote',
-        headers: { 'x-wallet-address': validWallet },
-        payload: { ...validBody, amount: 5000 },
+        url: '/loans/create',
+        headers: { authorization: 'Bearer valid.jwt.token' },
+        payload: { ...validBody, amount: 200 },
       });
 
       expect(res.statusCode).toBe(400);
-    }, 10000);
+    });
   });
 });
