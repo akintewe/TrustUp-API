@@ -7,11 +7,18 @@ import { ReputationModule } from '../reputation/reputation.module';
 import { SupabaseService } from '../../database/supabase.client';
 import { SorobanService } from '../../blockchain/soroban/soroban.service';
 import { CreditLineContractClient } from '../../blockchain/contracts/credit-line-contract.client';
+import { ReputationContractClient } from '../../blockchain/contracts/reputation-contract.client';
 
 @Module({
   imports: [ConfigModule, AuthModule, ReputationModule],
   controllers: [LoansController],
-  providers: [LoansService, SupabaseService, SorobanService, CreditLineContractClient],
+  providers: [
+    LoansService,
+    SupabaseService,
+    SorobanService,
+    CreditLineContractClient,
+    ReputationContractClient,
+  ],
   exports: [LoansService],
 })
 export class LoansModule {}
