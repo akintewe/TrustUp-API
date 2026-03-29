@@ -141,6 +141,84 @@ export class LiquidityContractClient {
     }
   }
 
+  async calculateDeposit(amountInStroops: bigint): Promise<bigint> {
+    this.ensureConfigured();
+
+    const amountArg = StellarSdk.nativeToScVal(amountInStroops, { type: 'i128' });
+
+    try {
+      return await this.readBigInt(
+        ['calculate_deposit', 'calculate_deposit_shares', 'preview_deposit'],
+        [amountArg],
+        'deposit shares preview',
+      );
+    } catch (error) {
+      this.logger.warn(`calculate_deposit unavailable, falling back to share-price math: ${error.message}`);
+      const stats = await this.getPoolStats();
+      if (stats.totalShares <= 0n || stats.totalLiquidity <= 0n) {
+        // First deposit: 1:1 ratio
+        return amountInStroops;
+      }
+      return (amountInStroops * stats.totalShares) / stats.totalLiquidity;
+    }
+  }
+
+  async buildDepositTx(userWallet: string, amountInStroops: bigint): Promise<string> {
+    this.ensureConfigured();
+
+    try {
+      const contract = new StellarSdk.Contract(this.contractId);
+      const server = this.sorobanService.getServer();
+      const networkPassphrase = this.sorobanService.getNetworkPassphrase();
+
+      const userArg = StellarSdk.nativeToScVal(StellarSdk.Address.fromString(userWallet), {
+        type: 'address',
+      });
+      const amountArg = StellarSdk.nativeToScVal(amountInStroops, { type: 'i128' });
+
+      const sourceKeypair = StellarSdk.Keypair.random();
+      const sourceAccount = new StellarSdk.Account(sourceKeypair.publicKey(), '0');
+
+      const tx = new StellarSdk.TransactionBuilder(sourceAccount, {
+        fee: StellarSdk.BASE_FEE,
+        networkPassphrase,
+      })
+        .addOperation(contract.call('deposit', userArg, amountArg))
+        .setTimeout(300)
+        .build();
+
+      const simulation = await server.simulateTransaction(tx);
+
+      if (StellarSdk.SorobanRpc.Api.isSimulationError(simulation)) {
+        const errorMsg =
+          (simulation as StellarSdk.SorobanRpc.Api.SimulateTransactionErrorResponse).error ||
+          'Unknown simulation error';
+        this.logger.error(`deposit simulation failed: ${errorMsg}`);
+        throw new ServiceUnavailableException({
+          code: 'BLOCKCHAIN_SIMULATION_FAILED',
+          message: 'Failed to simulate liquidity deposit transaction. Please try again later.',
+        });
+      }
+
+      const assembledTx = StellarSdk.SorobanRpc.assembleTransaction(
+        tx,
+        simulation as StellarSdk.SorobanRpc.Api.SimulateTransactionSuccessResponse,
+      ).build();
+
+      return assembledTx.toXDR();
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) {
+        throw error;
+      }
+
+      this.logger.error(`Failed to build deposit transaction: ${error.message}`);
+      throw new ServiceUnavailableException({
+        code: 'BLOCKCHAIN_TX_BUILD_FAILED',
+        message: 'Failed to construct liquidity deposit transaction. Please try again later.',
+      });
+    }
+  }
+
   async buildWithdrawTx(userWallet: string, sharesInStroops: bigint): Promise<string> {
     this.ensureConfigured();
 

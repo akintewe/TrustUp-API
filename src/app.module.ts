@@ -11,6 +11,7 @@ import { UsersModule } from './modules/users/users.module';
 import { MerchantsModule } from './modules/merchants/merchants.module';
 import { LiquidityModule } from './modules/liquidity/liquidity.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { TransactionsModule } from './modules/transactions/transactions.module';
 import { BlockchainIndexerModule } from './jobs/blockchain-indexer/blockchain-indexer.module';
 
 @Module({
@@ -40,6 +41,7 @@ import { BlockchainIndexerModule } from './jobs/blockchain-indexer/blockchain-in
     MerchantsModule,
     LiquidityModule,
     NotificationsModule,
+    TransactionsModule,
     BlockchainIndexerModule,
   ],
   controllers: [],

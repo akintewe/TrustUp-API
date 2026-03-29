@@ -250,6 +250,7 @@ export class LoansService {
     const interestRate = reputation.interestRate;
     const interest = loanAmount * (interestRate / 100) * (dto.term / 12);
     const totalRepayment = Math.round((loanAmount + interest) * 100) / 100;
+    const monthlyPayment = Math.floor((totalRepayment / dto.term) * 100) / 100;
     const schedule = this.generateSchedule(totalRepayment, dto.term);
 
     return {
@@ -261,6 +262,7 @@ export class LoansService {
         interestRate,
         totalRepayment,
         term: dto.term,
+        monthlyPayment,
         schedule,
       },
     };
