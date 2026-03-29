@@ -17,6 +17,12 @@ import { CreateLoanResponseDto } from './dto/create-loan-response.dto';
 import { LoanPaymentRequestDto } from './dto/loan-payment-request.dto';
 import { LoanPaymentResponseDto } from './dto/loan-payment-response.dto';
 import { AvailableCreditResponseDto } from './dto/available-credit-response.dto';
+import { LoanListQueryDto, LoanListStatusFilter } from './dto/loan-list-query.dto';
+import {
+  LoanListItemDto,
+  LoanListMerchantDto,
+  LoanListResponseDto,
+} from './dto/loan-list-response.dto';
 import { ReputationTier } from '../reputation/dto/reputation-response.dto';
 
 const GUARANTEE_PERCENT = 0.2;
@@ -42,6 +48,36 @@ interface CreateLoanRecord {
   term: number;
   status: 'pending';
   next_payment_due: string | null;
+}
+
+interface LoanPaymentRow {
+  amount: number | string | null;
+}
+
+interface LoanMerchantRow {
+  id: string | null;
+  name: string | null;
+  logo: string | null;
+}
+
+interface LoanListRow {
+  id: string;
+  loan_id: string;
+  merchant_id: string | null;
+  amount: number | string;
+  loan_amount: number | string;
+  guarantee: number | string;
+  interest_rate: number | string;
+  total_repayment: number | string;
+  remaining_balance: number | string;
+  term: number;
+  status: LoanListStatusFilter | 'pending';
+  next_payment_due: string | null;
+  created_at: string;
+  completed_at: string | null;
+  defaulted_at: string | null;
+  merchants?: LoanMerchantRow | LoanMerchantRow[] | null;
+  loan_payments?: LoanPaymentRow[] | null;
 }
 
 @Injectable()
@@ -179,6 +215,75 @@ export class LoansService {
     };
   }
 
+  async getMyLoans(wallet: string, query: LoanListQueryDto): Promise<LoanListResponseDto> {
+    const limit = query.limit ?? 20;
+    const offset = query.offset ?? 0;
+    const client = this.supabaseService.getServiceRoleClient();
+
+    let loansQuery = client
+      .from('loans')
+      .select(
+        `
+          id,
+          loan_id,
+          merchant_id,
+          amount,
+          loan_amount,
+          guarantee,
+          interest_rate,
+          total_repayment,
+          remaining_balance,
+          term,
+          status,
+          next_payment_due,
+          created_at,
+          completed_at,
+          defaulted_at,
+          merchants (
+            id,
+            name,
+            logo
+          ),
+          loan_payments (
+            amount
+          )
+        `,
+        { count: 'exact' },
+      )
+      .eq('user_wallet', wallet)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (query.status) {
+      loansQuery = loansQuery.eq('status', query.status);
+    } else {
+      loansQuery = loansQuery.in('status', [
+        LoanListStatusFilter.ACTIVE,
+        LoanListStatusFilter.COMPLETED,
+        LoanListStatusFilter.DEFAULTED,
+      ]);
+    }
+
+    const { data: loans, error, count } = await loansQuery;
+
+    if (error) {
+      this.logger.error(`Failed to fetch loans for ${wallet}: ${error.message}`);
+      throw new InternalServerErrorException({
+        code: 'USER_LOANS_QUERY_FAILED',
+        message: 'Failed to retrieve your loans. Please try again later.',
+      });
+    }
+
+    return {
+      data: (loans ?? []).map((loan) => this.mapLoanListItem(loan as LoanListRow)),
+      pagination: {
+        limit,
+        offset,
+        total: count ?? 0,
+      },
+    };
+  }
+
   async getAvailableCredit(wallet: string): Promise<AvailableCreditResponseDto> {
     let reputationScore: number;
 
@@ -307,14 +412,21 @@ export class LoansService {
   }
 
   generateSchedule(totalRepayment: number, term: number): SchedulePaymentDto[] {
+    return this.generateScheduleFromDate(totalRepayment, term, new Date());
+  }
+
+  private generateScheduleFromDate(
+    totalRepayment: number,
+    term: number,
+    startDate: Date,
+  ): SchedulePaymentDto[] {
     const monthlyPayment = Math.floor((totalRepayment / term) * 100) / 100;
-    const now = new Date();
     const schedule: SchedulePaymentDto[] = [];
 
     let allocated = 0;
 
     for (let i = 1; i <= term; i++) {
-      const dueDate = new Date(now);
+      const dueDate = new Date(startDate);
       dueDate.setMonth(dueDate.getMonth() + i);
       dueDate.setHours(0, 0, 0, 0);
 
@@ -333,6 +445,58 @@ export class LoansService {
     }
 
     return schedule;
+  }
+
+  private mapLoanListItem(loan: LoanListRow): LoanListItemDto {
+    const totalRepayment = Number(loan.total_repayment);
+    const remainingBalance = Number(loan.remaining_balance);
+    const totalPaid = this.roundCurrency(Math.max(0, totalRepayment - remainingBalance));
+    const schedule = this.generateScheduleFromDate(totalRepayment, loan.term, new Date(loan.created_at));
+    const paymentIndex = Math.min(loan.loan_payments?.length ?? 0, Math.max(schedule.length - 1, 0));
+    const scheduledNextPayment = schedule[paymentIndex];
+    const nextPayment =
+      loan.status === LoanListStatusFilter.ACTIVE && remainingBalance > 0
+        ? {
+            dueDate: loan.next_payment_due ?? scheduledNextPayment?.dueDate ?? null,
+            amount:
+              scheduledNextPayment != null
+                ? this.roundCurrency(Math.min(scheduledNextPayment.amount, remainingBalance))
+                : this.roundCurrency(remainingBalance),
+          }
+        : { dueDate: null, amount: null };
+
+    return {
+      id: loan.id,
+      loanId: loan.loan_id,
+      amount: Number(loan.amount),
+      loanAmount: Number(loan.loan_amount),
+      guarantee: Number(loan.guarantee),
+      interestRate: Number(loan.interest_rate),
+      totalRepayment,
+      totalPaid,
+      remainingBalance,
+      term: loan.term,
+      status: loan.status as LoanListStatusFilter,
+      merchant: this.normalizeMerchant(loan),
+      nextPayment,
+      createdAt: loan.created_at,
+      completedAt: loan.completed_at,
+      defaultedAt: loan.defaulted_at,
+    };
+  }
+
+  private normalizeMerchant(loan: LoanListRow): LoanListMerchantDto {
+    const merchant = Array.isArray(loan.merchants) ? loan.merchants[0] : loan.merchants;
+
+    return {
+      id: merchant?.id ?? loan.merchant_id ?? null,
+      name: merchant?.name ?? null,
+      logo: merchant?.logo ?? null,
+    };
+  }
+
+  private roundCurrency(value: number): number {
+    return Math.round(value * 100) / 100;
   }
 
   private mapScoreToCreditTier(score: number): {

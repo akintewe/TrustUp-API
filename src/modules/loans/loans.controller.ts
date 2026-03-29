@@ -8,6 +8,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Query,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -15,6 +16,7 @@ import {
   ApiResponse,
   ApiBearerAuth,
   ApiParam,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { LoansService } from './loans.service';
 import { LoanQuoteRequestDto } from './dto/loan-quote-request.dto';
@@ -24,6 +26,8 @@ import { CreateLoanResponseDto } from './dto/create-loan-response.dto';
 import { LoanPaymentRequestDto } from './dto/loan-payment-request.dto';
 import { LoanPaymentResponseDto } from './dto/loan-payment-response.dto';
 import { AvailableCreditResponseDto } from './dto/available-credit-response.dto';
+import { LoanListQueryDto, LoanListStatusFilter } from './dto/loan-list-query.dto';
+import { LoanListResponseDto } from './dto/loan-list-response.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
@@ -55,6 +59,47 @@ export class LoansController {
   ) {
     const data = await this.loansService.calculateLoanQuote(user.wallet, dto);
     return { success: true, data, message: 'Loan quote calculated successfully' };
+  }
+
+  @Get('my-loans')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'List loans for the authenticated user',
+    description:
+      'Returns paginated loans for the authenticated user ordered by creation date (newest first). Supports filtering by active, completed, or defaulted status and includes merchant information plus payment summary fields.',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: LoanListStatusFilter,
+    description: 'Filter loans by status',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Page size (default 20, max 100)',
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    type: Number,
+    description: 'Number of records to skip (default 0)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'User loans retrieved successfully',
+    type: LoanListResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid status or pagination parameters' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - missing or invalid JWT' })
+  async getMyLoans(
+    @CurrentUser() user: { wallet: string },
+    @Query() query: LoanListQueryDto,
+  ) {
+    const data = await this.loansService.getMyLoans(user.wallet, query);
+    return { success: true, ...data };
   }
 
   @Get('available-credit')
