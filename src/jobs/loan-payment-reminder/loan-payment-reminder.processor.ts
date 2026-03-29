@@ -70,6 +70,7 @@ export class LoanPaymentReminderProcessor extends WorkerHost {
           { context: 'LoanPaymentReminderProcessor', action: 'process' },
           'No active loans found — skipping reminder run',
         );
+        // summary will log 0s in finally, which is accurate
         return;
       }
 
@@ -80,6 +81,16 @@ export class LoanPaymentReminderProcessor extends WorkerHost {
 
       const candidates = this.identifyCandidates(loans);
       summary.total = candidates.length;
+
+      this.logger.log(
+        {
+          context: 'LoanPaymentReminderProcessor',
+          action: 'identifyCandidates',
+          activeLoans: loans.length,
+          candidates: candidates.length,
+        },
+        `Identified ${candidates.length} reminder candidates from ${loans.length} active loans`,
+      );
 
       const merchantCache = new Map<string, MerchantInfo>();
 
