@@ -19,6 +19,8 @@ import { InvestmentSummaryResponseDto } from './dto/investment-summary-response.
 import { PoolOverviewResponseDto } from './dto/pool-overview-response.dto';
 import { LiquidityWithdrawRequestDto } from './dto/liquidity-withdraw-request.dto';
 import { LiquidityWithdrawResponseDto } from './dto/liquidity-withdraw-response.dto';
+import { LiquidityDepositRequestDto } from './dto/liquidity-deposit-request.dto';
+import { LiquidityDepositResponseDto } from './dto/liquidity-deposit-response.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
@@ -81,6 +83,35 @@ export class LiquidityController {
   ): Promise<{ success: boolean; data: InvestmentSummaryResponseDto; message: string }> {
     const data = await this.liquidityService.getInvestmentSummary(user.wallet);
     return { success: true, data, message: 'Investment summary retrieved successfully' };
+  }
+
+  @Post('deposit')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Construct a liquidity pool deposit transaction',
+    description:
+      'Validates the deposit amount (minimum $10), queries the pool smart contract for current state, calculates the expected shares the user will receive, and returns an unsigned Soroban deposit() XDR for the client to sign.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Unsigned XDR transaction and deposit preview returned successfully',
+    type: LiquidityDepositResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid amount or deposit below minimum ($10)' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - missing or invalid JWT' })
+  @ApiResponse({ status: 503, description: 'Liquidity contract unavailable or network issue' })
+  async depositLiquidity(
+    @CurrentUser() user: { wallet: string },
+    @Body() dto: LiquidityDepositRequestDto,
+  ): Promise<{ success: boolean; data: LiquidityDepositResponseDto; message: string }> {
+    const data = await this.liquidityService.depositLiquidity(user.wallet, dto);
+    return {
+      success: true,
+      data,
+      message: 'Deposit transaction constructed successfully',
+    };
   }
 
   @Post('withdraw')

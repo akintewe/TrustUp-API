@@ -52,6 +52,12 @@ export class LoanQuoteResponseDto {
   term: number;
 
   @ApiProperty({
+    description: 'Fixed monthly payment amount in USD',
+    example: 102.67,
+  })
+  monthlyPayment: number;
+
+  @ApiProperty({
     description: 'Monthly repayment schedule',
     type: [SchedulePaymentDto],
   })

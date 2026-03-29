@@ -13,6 +13,8 @@ import { LiquidityContractClient } from '../../blockchain/contracts/liquidity-co
 import { InvestmentSummaryResponseDto } from './dto/investment-summary-response.dto';
 import { LiquidityWithdrawRequestDto } from './dto/liquidity-withdraw-request.dto';
 import { LiquidityWithdrawResponseDto } from './dto/liquidity-withdraw-response.dto';
+import { LiquidityDepositRequestDto } from './dto/liquidity-deposit-request.dto';
+import { LiquidityDepositResponseDto } from './dto/liquidity-deposit-response.dto';
 import { PoolOverviewResponseDto } from './dto/pool-overview-response.dto';
 
 const SUMMARY_CACHE_TTL = 60;
@@ -113,6 +115,38 @@ export class LiquidityService {
 
     await this.cacheManager.set(cacheKey, summary, SUMMARY_CACHE_TTL);
     return summary;
+  }
+
+  async depositLiquidity(
+    wallet: string,
+    dto: LiquidityDepositRequestDto,
+  ): Promise<LiquidityDepositResponseDto> {
+    const amountInStroops = this.toStroops(dto.amount);
+
+    const [poolStats, sharesReceived] = await Promise.all([
+      this.liquidityClient.getPoolStats(),
+      this.liquidityClient.calculateDeposit(amountInStroops),
+    ]);
+
+    const unsignedXdr = await this.liquidityClient.buildDepositTx(wallet, amountInStroops);
+
+    const currentTotalLiquidity = this.fromStroops(poolStats.totalLiquidity);
+    const currentSharePrice =
+      poolStats.totalShares > 0n
+        ? this.roundTo7(Number(poolStats.sharePrice) / Number(SHARE_PRICE_BPS))
+        : 1;
+
+    return {
+      unsignedXdr,
+      description: `Deposit $${dto.amount} into liquidity pool`,
+      preview: {
+        depositAmount: dto.amount,
+        sharesReceived: this.fromStroops(sharesReceived),
+        currentSharePrice,
+        newTotalValue: this.roundTo7(currentTotalLiquidity + dto.amount),
+        currentTotalLiquidity,
+      },
+    };
   }
 
   async withdrawLiquidity(
