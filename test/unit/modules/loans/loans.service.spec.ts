@@ -10,6 +10,7 @@ import { ReputationService } from '../../../../src/modules/reputation/reputation
 import { SupabaseService } from '../../../../src/database/supabase.client';
 import { CreditLineContractClient } from '../../../../src/blockchain/contracts/credit-line-contract.client';
 import { ReputationContractClient } from '../../../../src/blockchain/contracts/reputation-contract.client';
+import { LoanListStatusFilter } from '../../../../src/modules/loans/dto/loan-list-query.dto';
 
 describe('LoansService', () => {
   let service: LoansService;
@@ -24,6 +25,9 @@ describe('LoansService', () => {
   const mockSupabaseFrom = {
     select: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
+    in: jest.fn().mockReturnThis(),
+    order: jest.fn().mockReturnThis(),
+    range: jest.fn().mockReturnThis(),
     single: jest.fn(),
     insert: jest.fn(),
   };
@@ -62,6 +66,9 @@ describe('LoansService', () => {
     mockSupabaseClient.from.mockReturnValue(mockSupabaseFrom);
     mockSupabaseFrom.select.mockReturnThis();
     mockSupabaseFrom.eq.mockReturnThis();
+    mockSupabaseFrom.in.mockReturnThis();
+    mockSupabaseFrom.order.mockReturnThis();
+    mockSupabaseFrom.range.mockReturnThis();
     mockSupabaseFrom.insert.mockResolvedValue({ error: null });
     mockCreditLineContractClient.buildCreateLoanTransaction.mockResolvedValue('AAAAAgAAAAC...');
     mockCreditLineContractClient.buildRepayLoanTx.mockResolvedValue('AAAAAgAAAAA...');
@@ -525,6 +532,138 @@ describe('LoansService', () => {
       await expect(service.getAvailableCredit(validWallet)).rejects.toThrow(
         InternalServerErrorException,
       );
+    });
+  });
+
+  describe('getMyLoans', () => {
+    beforeEach(() => {
+      mockSupabaseFrom.eq.mockImplementation((column: string, value: unknown) => {
+        if (column === 'status' && value === LoanListStatusFilter.ACTIVE) {
+          return Promise.resolve({
+            data: [
+              {
+                id: '11111111-2222-3333-4444-555555555555',
+                loan_id: 'chain-loan-1',
+                merchant_id: merchantId,
+                amount: 500,
+                loan_amount: 400,
+                guarantee: 100,
+                interest_rate: 8,
+                total_repayment: 410.67,
+                remaining_balance: 205.33,
+                term: 4,
+                status: 'active',
+                next_payment_due: '2026-04-13T00:00:00.000Z',
+                created_at: '2026-03-13T00:00:00.000Z',
+                completed_at: null,
+                defaulted_at: null,
+                merchants: {
+                  id: merchantId,
+                  name: 'TechStore',
+                  logo: 'https://cdn.trustup.app/techstore.png',
+                },
+                loan_payments: [{ amount: 102.66 }, { amount: 102.68 }],
+              },
+            ],
+            error: null,
+            count: 1,
+          });
+        }
+
+        return mockSupabaseFrom;
+      });
+
+      mockSupabaseFrom.in.mockResolvedValue({
+        data: [],
+        error: null,
+        count: 0,
+      });
+    });
+
+    it('should return paginated loans with derived totals and next payment details', async () => {
+      const result = await service.getMyLoans(validWallet, {
+        status: LoanListStatusFilter.ACTIVE,
+        limit: 20,
+        offset: 0,
+      });
+
+      expect(result).toEqual({
+        data: [
+          {
+            id: '11111111-2222-3333-4444-555555555555',
+            loanId: 'chain-loan-1',
+            amount: 500,
+            loanAmount: 400,
+            guarantee: 100,
+            interestRate: 8,
+            totalRepayment: 410.67,
+            totalPaid: 205.34,
+            remainingBalance: 205.33,
+            term: 4,
+            status: LoanListStatusFilter.ACTIVE,
+            merchant: {
+              id: merchantId,
+              name: 'TechStore',
+              logo: 'https://cdn.trustup.app/techstore.png',
+            },
+            nextPayment: {
+              dueDate: '2026-04-13T00:00:00.000Z',
+              amount: 102.66,
+            },
+            createdAt: '2026-03-13T00:00:00.000Z',
+            completedAt: null,
+            defaultedAt: null,
+          },
+        ],
+        pagination: {
+          limit: 20,
+          offset: 0,
+          total: 1,
+        },
+      });
+      expect(mockSupabaseClient.from).toHaveBeenCalledWith('loans');
+      expect(mockSupabaseFrom.order).toHaveBeenCalledWith('created_at', { ascending: false });
+      expect(mockSupabaseFrom.range).toHaveBeenCalledWith(0, 19);
+    });
+
+    it('should return an empty paginated result when the user has no indexed loans', async () => {
+      const result = await service.getMyLoans(validWallet, { limit: 10, offset: 0 });
+
+      expect(result).toEqual({
+        data: [],
+        pagination: {
+          limit: 10,
+          offset: 0,
+          total: 0,
+        },
+      });
+      expect(mockSupabaseFrom.in).toHaveBeenCalledWith('status', [
+        LoanListStatusFilter.ACTIVE,
+        LoanListStatusFilter.COMPLETED,
+        LoanListStatusFilter.DEFAULTED,
+      ]);
+    });
+
+    it('should throw InternalServerErrorException when the loans query fails', async () => {
+      mockSupabaseFrom.eq.mockImplementation((column: string, value: unknown) => {
+        if (column === 'status' && value === LoanListStatusFilter.DEFAULTED) {
+          return Promise.resolve({
+            data: null,
+            error: { message: 'db offline' },
+            count: null,
+          });
+        }
+
+        return mockSupabaseFrom;
+      });
+
+      await expect(
+        service.getMyLoans(validWallet, {
+          status: LoanListStatusFilter.DEFAULTED,
+          limit: 20,
+          offset: 0,
+        }),
+      ).rejects.toThrow(InternalServerErrorException);
     });
   });
 });

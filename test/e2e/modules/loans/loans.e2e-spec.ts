@@ -28,6 +28,9 @@ describe('LoansController (e2e)', () => {
   const mockSupabaseFrom = {
     select: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
+    in: jest.fn().mockReturnThis(),
+    order: jest.fn().mockReturnThis(),
+    range: jest.fn().mockReturnThis(),
     single: jest.fn().mockResolvedValue({
       data: { id: merchantId, name: 'TechStore', is_active: true },
       error: null,
@@ -95,6 +98,13 @@ describe('LoansController (e2e)', () => {
     mockSupabaseClient.from.mockReturnValue(mockSupabaseFrom);
     mockSupabaseFrom.select.mockReturnThis();
     mockSupabaseFrom.eq.mockReturnThis();
+    mockSupabaseFrom.in.mockResolvedValue({
+      data: [],
+      error: null,
+      count: 0,
+    });
+    mockSupabaseFrom.order.mockReturnThis();
+    mockSupabaseFrom.range.mockReturnThis();
     mockSupabaseFrom.single.mockResolvedValue({
       data: { id: merchantId, name: 'TechStore', is_active: true },
       error: null,
@@ -228,6 +238,104 @@ describe('LoansController (e2e)', () => {
         url: '/loans/create',
         headers: { authorization: 'Bearer valid.jwt.token' },
         payload: { ...validBody, amount: 200 },
+      });
+
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
+  describe('GET /loans/my-loans', () => {
+    it('should return paginated loans for the authenticated user', async () => {
+      mockSupabaseFrom.in.mockResolvedValue({
+        data: [
+          {
+            id: '11111111-2222-3333-4444-555555555555',
+            loan_id: 'chain-loan-1',
+            merchant_id: merchantId,
+            amount: 500,
+            loan_amount: 400,
+            guarantee: 100,
+            interest_rate: 8,
+            total_repayment: 410.67,
+            remaining_balance: 205.33,
+            term: 4,
+            status: 'active',
+            next_payment_due: '2026-04-13T00:00:00.000Z',
+            created_at: '2026-03-13T00:00:00.000Z',
+            completed_at: null,
+            defaulted_at: null,
+            merchants: {
+              id: merchantId,
+              name: 'TechStore',
+              logo: 'https://cdn.trustup.app/techstore.png',
+            },
+            loan_payments: [{ amount: 102.66 }, { amount: 102.68 }],
+          },
+        ],
+        error: null,
+        count: 1,
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/loans/my-loans?limit=20&offset=0',
+        headers: { authorization: 'Bearer valid.jwt.token' },
+      });
+
+      expect(res.statusCode).toBe(200);
+
+      const body = JSON.parse(res.payload);
+      expect(body).toEqual({
+        success: true,
+        data: [
+          {
+            id: '11111111-2222-3333-4444-555555555555',
+            loanId: 'chain-loan-1',
+            amount: 500,
+            loanAmount: 400,
+            guarantee: 100,
+            interestRate: 8,
+            totalRepayment: 410.67,
+            totalPaid: 205.34,
+            remainingBalance: 205.33,
+            term: 4,
+            status: 'active',
+            merchant: {
+              id: merchantId,
+              name: 'TechStore',
+              logo: 'https://cdn.trustup.app/techstore.png',
+            },
+            nextPayment: {
+              dueDate: '2026-04-13T00:00:00.000Z',
+              amount: 102.66,
+            },
+            createdAt: '2026-03-13T00:00:00.000Z',
+            completedAt: null,
+            defaultedAt: null,
+          },
+        ],
+        pagination: {
+          limit: 20,
+          offset: 0,
+          total: 1,
+        },
+      });
+    });
+
+    it('should return 401 when no bearer token is provided', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/loans/my-loans',
+      });
+
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('should return 400 when the status filter is invalid', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/loans/my-loans?status=pending',
+        headers: { authorization: 'Bearer valid.jwt.token' },
       });
 
       expect(res.statusCode).toBe(400);

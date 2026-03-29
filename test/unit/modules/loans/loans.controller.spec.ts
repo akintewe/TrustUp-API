@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { LoansController } from '../../../../src/modules/loans/loans.controller';
 import { LoansService } from '../../../../src/modules/loans/loans.service';
 import { CreateLoanResponseDto } from '../../../../src/modules/loans/dto/create-loan-response.dto';
+import { LoanListStatusFilter } from '../../../../src/modules/loans/dto/loan-list-query.dto';
 
 describe('LoansController', () => {
   let controller: LoansController;
@@ -29,6 +30,7 @@ describe('LoansController', () => {
     calculateLoanQuote: jest.fn(),
     getAvailableCredit: jest.fn(),
     createLoan: jest.fn(),
+    getMyLoans: jest.fn(),
   };
 
   const mockCreateLoanResponse: CreateLoanResponseDto = {
@@ -149,6 +151,65 @@ describe('LoansController', () => {
       const user = { wallet: validWallet };
       await expect(controller.getAvailableCredit(user)).rejects.toThrow(
         'Reputation contract unavailable',
+      );
+    });
+  });
+
+  describe('getMyLoans', () => {
+    const mockLoanListResponse = {
+      data: [
+        {
+          id: '11111111-2222-3333-4444-555555555555',
+          loanId: 'chain-loan-1',
+          amount: 500,
+          loanAmount: 400,
+          guarantee: 100,
+          interestRate: 8,
+          totalRepayment: 410.67,
+          totalPaid: 205.34,
+          remainingBalance: 205.33,
+          term: 4,
+          status: LoanListStatusFilter.ACTIVE,
+          merchant: {
+            id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            name: 'TechStore',
+            logo: 'https://cdn.trustup.app/techstore.png',
+          },
+          nextPayment: {
+            dueDate: '2026-04-13T00:00:00.000Z',
+            amount: 102.66,
+          },
+          createdAt: '2026-03-13T00:00:00.000Z',
+          completedAt: null,
+          defaultedAt: null,
+        },
+      ],
+      pagination: {
+        limit: 20,
+        offset: 0,
+        total: 1,
+      },
+    };
+
+    it('should return user loans wrapped in the response envelope', async () => {
+      const query = { status: LoanListStatusFilter.ACTIVE, limit: 20, offset: 0 };
+      mockLoansService.getMyLoans.mockResolvedValue(mockLoanListResponse);
+
+      const result = await controller.getMyLoans(currentUser, query);
+
+      expect(result).toEqual({
+        success: true,
+        ...mockLoanListResponse,
+      });
+      expect(loansService.getMyLoans).toHaveBeenCalledWith(validWallet, query);
+      expect(loansService.getMyLoans).toHaveBeenCalledTimes(1);
+    });
+
+    it('should propagate service errors to the caller', async () => {
+      mockLoansService.getMyLoans.mockRejectedValue(new Error('Failed to retrieve user loans'));
+
+      await expect(controller.getMyLoans(currentUser, {})).rejects.toThrow(
+        'Failed to retrieve user loans',
       );
     });
   });
