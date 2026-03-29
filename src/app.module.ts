@@ -13,6 +13,7 @@ import { LiquidityModule } from './modules/liquidity/liquidity.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
 import { BlockchainIndexerModule } from './jobs/blockchain-indexer/blockchain-indexer.module';
+import { LoanPaymentReminderModule } from './jobs/loan-payment-reminder/loan-payment-reminder.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { BlockchainIndexerModule } from './jobs/blockchain-indexer/blockchain-in
     NotificationsModule,
     TransactionsModule,
     BlockchainIndexerModule,
+    LoanPaymentReminderModule,
   ],
   controllers: [],
   providers: [
