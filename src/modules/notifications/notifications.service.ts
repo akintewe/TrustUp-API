@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../../database/supabase.client';
 import { NotificationListQueryDto } from './dto/notification-list-query.dto';
 import {
   NotificationItemDto,
   NotificationListResponseDto,
 } from './dto/notification-list-response.dto';
+import { MarkAsReadResponseDto } from './dto/mark-as-read-response.dto';
 
 @Injectable()
 export class NotificationsService {
@@ -69,5 +70,65 @@ export class NotificationsService {
       },
       unreadCount: unreadCount ?? 0,
     };
+  }
+
+  async markAsRead(wallet: string, notificationId: string): Promise<MarkAsReadResponseDto> {
+    const client = this.supabaseService.getServiceRoleClient();
+
+    const { data: notification, error: fetchError } = await client
+      .from('notifications')
+      .select('id, user_wallet, is_read')
+      .eq('id', notificationId)
+      .single();
+
+    if (fetchError || !notification) {
+      throw new NotFoundException({
+        code: 'NOTIFICATION_NOT_FOUND',
+        message: 'Notification not found',
+      });
+    }
+
+    if (notification.user_wallet !== wallet) {
+      throw new ForbiddenException({
+        code: 'NOTIFICATION_FORBIDDEN',
+        message: 'You do not have permission to update this notification',
+      });
+    }
+
+    if (notification.is_read) {
+      return { success: true, updatedCount: 0 };
+    }
+
+    const now = new Date().toISOString();
+    const { error: updateError } = await client
+      .from('notifications')
+      .update({ is_read: true, read_at: now, updated_at: now })
+      .eq('id', notificationId);
+
+    if (updateError) {
+      this.logger.error(`Failed to mark notification ${notificationId} as read: ${updateError.message}`);
+      throw new Error(updateError.message);
+    }
+
+    return { success: true, updatedCount: 1 };
+  }
+
+  async markAllAsRead(wallet: string): Promise<MarkAsReadResponseDto> {
+    const client = this.supabaseService.getServiceRoleClient();
+
+    const now = new Date().toISOString();
+    const { data, error } = await client
+      .from('notifications')
+      .update({ is_read: true, read_at: now, updated_at: now })
+      .eq('user_wallet', wallet)
+      .eq('is_read', false)
+      .select('id');
+
+    if (error) {
+      this.logger.error(`Failed to mark all notifications as read for ${wallet}: ${error.message}`);
+      throw new Error(error.message);
+    }
+
+    return { success: true, updatedCount: data?.length ?? 0 };
   }
 }

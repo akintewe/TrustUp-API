@@ -1,14 +1,16 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Patch, Param, Query, UseGuards } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
   ApiQuery,
+  ApiParam,
 } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { NotificationListQueryDto } from './dto/notification-list-query.dto';
 import { NotificationListResponseDto } from './dto/notification-list-response.dto';
+import { MarkAsReadResponseDto } from './dto/mark-as-read-response.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
@@ -40,5 +42,45 @@ export class NotificationsController {
   ) {
     const data = await this.notificationsService.getNotifications(user.wallet, query);
     return { success: true, ...data };
+  }
+
+  @Patch('read-all')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Mark all notifications as read',
+    description: 'Marks all unread notifications for the authenticated user as read.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'All unread notifications marked as read',
+    type: MarkAsReadResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized - missing or invalid JWT' })
+  async markAllAsRead(@CurrentUser() user: { wallet: string }): Promise<MarkAsReadResponseDto> {
+    return this.notificationsService.markAllAsRead(user.wallet);
+  }
+
+  @Patch(':id/read')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Mark a notification as read',
+    description: 'Marks a single notification as read by its ID. Validates ownership.',
+  })
+  @ApiParam({ name: 'id', description: 'Notification UUID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Notification marked as read',
+    type: MarkAsReadResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized - missing or invalid JWT' })
+  @ApiResponse({ status: 403, description: 'Forbidden - notification belongs to another user' })
+  @ApiResponse({ status: 404, description: 'Notification not found' })
+  async markAsRead(
+    @CurrentUser() user: { wallet: string },
+    @Param('id') id: string,
+  ): Promise<MarkAsReadResponseDto> {
+    return this.notificationsService.markAsRead(user.wallet, id);
   }
 }
