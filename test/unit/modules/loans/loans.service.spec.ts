@@ -306,6 +306,18 @@ describe('LoansService', () => {
         InternalServerErrorException,
       );
     });
+
+    it('should handle missing error message on pending loan persistence failure', async () => {
+      mockReputation(75, 'silver', 8, 2000);
+      mockMerchantFound();
+      mockSupabaseFrom.insert.mockResolvedValue({
+        error: { message: null },
+      });
+
+      await expect(service.createLoan(validWallet, baseDto)).rejects.toThrow(
+        InternalServerErrorException,
+      );
+    });
   });
 
   describe('repayLoan', () => {
@@ -533,6 +545,39 @@ describe('LoansService', () => {
         InternalServerErrorException,
       );
     });
+
+    it('should calculate available credit for gold tier reputation (score >= 90)', async () => {
+      mockReputationContractClient.getScore.mockResolvedValue(95);
+      mockSupabaseFrom.eq
+        .mockImplementationOnce(() => mockSupabaseFrom)
+        .mockResolvedValueOnce({
+          data: [{ remaining_balance: 1000 }],
+          error: null,
+        });
+
+      const result = await service.getAvailableCredit(validWallet);
+
+      expect(result).toEqual({
+        reputationScore: 95,
+        reputationTier: 'gold',
+        maxCreditLimit: 5000,
+        creditUsed: 1000,
+        availableCredit: 4000,
+        activeLoans: 1,
+      });
+    });
+
+    it('should handle null/undefined remaining balances or empty loan list', async () => {
+      mockSupabaseFrom.eq
+        .mockImplementationOnce(() => mockSupabaseFrom)
+        .mockResolvedValueOnce({
+          data: [{ remaining_balance: null }],
+          error: null,
+        });
+
+      const result = await service.getAvailableCredit(validWallet);
+      expect(result.creditUsed).toBe(0);
+    });
   });
 
   describe('getMyLoans', () => {
@@ -664,6 +709,54 @@ describe('LoansService', () => {
           offset: 0,
         }),
       ).rejects.toThrow(InternalServerErrorException);
+    });
+
+    it('should use default limit (20) and offset (0) when not provided in query', async () => {
+      const result = await service.getMyLoans(validWallet, {});
+      expect(mockSupabaseFrom.range).toHaveBeenCalledWith(0, 19);
+    });
+
+    it('should handle merchants array and null loan payments', async () => {
+      mockSupabaseFrom.eq.mockImplementation((column: string, value: unknown) => {
+        if (column === 'status' && value === LoanListStatusFilter.ACTIVE) {
+          return Promise.resolve({
+            data: [
+              {
+                id: '11111111-2222-3333-4444-555555555555',
+                loan_id: 'chain-loan-1',
+                merchant_id: merchantId,
+                amount: 500,
+                loan_amount: 400,
+                guarantee: 100,
+                interest_rate: 8,
+                total_repayment: 410.67,
+                remaining_balance: 205.33,
+                term: 4,
+                status: 'active',
+                next_payment_due: null,
+                created_at: '2026-03-13T00:00:00.000Z',
+                completed_at: null,
+                defaulted_at: null,
+                merchants: [
+                  {
+                    id: merchantId,
+                    name: 'TechStore',
+                    logo: 'https://cdn.trustup.app/techstore.png',
+                  },
+                ],
+                loan_payments: null,
+              },
+            ],
+            error: null,
+            count: 1,
+          });
+        }
+        return mockSupabaseFrom;
+      });
+
+      const result = await service.getMyLoans(validWallet, { status: LoanListStatusFilter.ACTIVE });
+      expect(result.data[0].merchant.name).toBe('TechStore');
+      expect(result.data[0].nextPayment.dueDate).not.toBeNull();
     });
   });
 });
