@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { SupabaseService } from '../../database/supabase.client';
 import { NotificationListQueryDto } from './dto/notification-list-query.dto';
 import {
@@ -23,7 +28,9 @@ export class NotificationsService {
 
     let notificationsQuery = client
       .from('notifications')
-      .select('id, type, title, message, data, is_read, created_at, read_at', { count: 'exact' })
+      .select('id, type, title, message, data, is_read, created_at, read_at', {
+        count: 'exact',
+      })
       .eq('user_wallet', wallet)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
@@ -32,10 +39,16 @@ export class NotificationsService {
       notificationsQuery = notificationsQuery.eq('is_read', false);
     }
 
+    if (query.type) {
+      notificationsQuery = notificationsQuery.eq('type', query.type);
+    }
+
     const { data: notifications, error, count } = await notificationsQuery;
 
     if (error) {
-      this.logger.error(`Failed to fetch notifications for ${wallet}: ${error.message}`);
+      this.logger.error(
+        `Failed to fetch notifications for ${wallet}: ${error.message}`,
+      );
       throw new Error(error.message);
     }
 
@@ -46,7 +59,9 @@ export class NotificationsService {
       .eq('is_read', false);
 
     if (unreadError) {
-      this.logger.error(`Failed to fetch unread count for ${wallet}: ${unreadError.message}`);
+      this.logger.error(
+        `Failed to fetch unread count for ${wallet}: ${unreadError.message}`,
+      );
       throw new Error(unreadError.message);
     }
 
@@ -72,7 +87,10 @@ export class NotificationsService {
     };
   }
 
-  async markAsRead(wallet: string, notificationId: string): Promise<MarkAsReadResponseDto> {
+  async markAsRead(
+    wallet: string,
+    notificationId: string,
+  ): Promise<MarkAsReadResponseDto> {
     const client = this.supabaseService.getServiceRoleClient();
 
     const { data: notification, error: fetchError } = await client
@@ -106,7 +124,9 @@ export class NotificationsService {
       .eq('id', notificationId);
 
     if (updateError) {
-      this.logger.error(`Failed to mark notification ${notificationId} as read: ${updateError.message}`);
+      this.logger.error(
+        `Failed to mark notification ${notificationId} as read: ${updateError.message}`,
+      );
       throw new Error(updateError.message);
     }
 
@@ -125,7 +145,9 @@ export class NotificationsService {
       .select('id');
 
     if (error) {
-      this.logger.error(`Failed to mark all notifications as read for ${wallet}: ${error.message}`);
+      this.logger.error(
+        `Failed to mark all notifications as read for ${wallet}: ${error.message}`,
+      );
       throw new Error(error.message);
     }
 

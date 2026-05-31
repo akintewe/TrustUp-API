@@ -1,6 +1,23 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsInt, IsOptional, Max, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsIn,
+  IsInt,
+  IsOptional,
+  Max,
+  Min,
+} from 'class-validator';
+import type { NotificationType } from './notification-list-response.dto';
+
+const notificationTypes: NotificationType[] = [
+  'loan_reminder',
+  'loan_overdue',
+  'loan_completed',
+  'reputation_changed',
+  'liquidity_deposited',
+  'liquidity_withdrawn',
+];
 
 export class NotificationListQueryDto {
   @ApiPropertyOptional({
@@ -15,6 +32,15 @@ export class NotificationListQueryDto {
   })
   @IsBoolean()
   unread?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Filter notifications by type',
+    enum: notificationTypes,
+    example: 'loan_reminder',
+  })
+  @IsOptional()
+  @IsIn(notificationTypes)
+  type?: NotificationType;
 
   @ApiPropertyOptional({
     description: 'Maximum number of notifications to return',
