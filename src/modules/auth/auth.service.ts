@@ -6,10 +6,11 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { Keypair, StrKey } from 'stellar-sdk';
 import { SupabaseService } from '../../database/supabase.client';
 import { UsersRepository } from '../../database/repositories/users.repository';
+import { SessionsRepository } from '../../database/repositories/sessions.repository';
 import { NonceResponseDto } from './dto/nonce-response.dto';
 import { VerifyRequestDto } from './dto/verify-request.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
@@ -31,6 +32,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly usersRepository: UsersRepository,
+    private readonly sessionsRepository: SessionsRepository,
   ) {}
 
   /**
@@ -248,7 +250,6 @@ export class AuthService {
    */
   async generateTokens(wallet: string): Promise<AuthResponseDto> {
     const userId = await this.findOrCreateUser(wallet);
-    const client = this.supabaseService.getServiceRoleClient();
 
     const accessToken = this.jwtService.sign(
       { wallet, type: 'access' },
@@ -269,19 +270,14 @@ export class AuthService {
     // Hash refresh token with SHA-256 before storage (per sessions table schema)
     const refreshTokenHash = createHash('sha256').update(refreshToken).digest('hex');
     const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRATION_MS);
+    const tokenFamily = randomUUID();
 
-    const { error: sessionError } = await client.from('sessions').insert({
-      user_id: userId,
-      refresh_token_hash: refreshTokenHash,
-      expires_at: refreshExpiresAt.toISOString(),
+    await this.sessionsRepository.create({
+      userId,
+      refreshTokenHash,
+      expiresAt: refreshExpiresAt.toISOString(),
+      tokenFamily,
     });
-
-    if (sessionError) {
-      throw new InternalServerErrorException({
-        code: 'DATABASE_SESSION_CREATE_FAILED',
-        message: 'Failed to create session.',
-      });
-    }
 
     return {
       accessToken,
@@ -289,5 +285,149 @@ export class AuthService {
       expiresIn: ACCESS_TOKEN_EXPIRATION_SECONDS,
       tokenType: 'Bearer',
     };
+  }
+
+  /**
+   * Refreshes access and refresh tokens using a valid refresh token.
+   * Invalidates the old refresh token by deleting it from the database (token rotation).
+   */
+  async refreshTokens(refreshToken: string): Promise<AuthResponseDto> {
+    let payload: any;
+    try {
+      payload = await this.jwtService.verifyAsync(refreshToken, {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      });
+    } catch (error: any) {
+      if (error?.name === 'TokenExpiredError') {
+        throw new UnauthorizedException({
+          code: 'AUTH_TOKEN_EXPIRED',
+          message: 'Refresh token has expired.',
+        });
+      }
+      throw new UnauthorizedException({
+        code: 'AUTH_TOKEN_INVALID',
+        message: 'Invalid or expired refresh token signature.',
+      });
+    }
+
+    if (!payload || payload.type !== 'refresh' || !payload.wallet) {
+      throw new UnauthorizedException({
+        code: 'AUTH_TOKEN_INVALID',
+        message: 'Invalid refresh token payload.',
+      });
+    }
+
+    const hash = createHash('sha256').update(refreshToken).digest('hex');
+    const session = await this.sessionsRepository.findByHash(hash);
+
+    if (!session) {
+      throw new UnauthorizedException({
+        code: 'AUTH_TOKEN_REVOKED',
+        message: 'Refresh token not found or already revoked.',
+      });
+    }
+
+    if (session.revoked_at !== null) {
+      // Invalidate the entire token family (rotation attack detection)
+      await this.sessionsRepository.revokeFamily(session.token_family);
+      throw new UnauthorizedException({
+        code: 'AUTH_TOKEN_REVOKED',
+        message: 'Refresh token has been revoked.',
+      });
+    }
+
+    if (new Date(session.expires_at) < new Date()) {
+      // Clean up the expired session from the DB
+      // Note: A scheduled cron job or database trigger typically performs background cleanup
+      // of all expired/revoked sessions. We do it here opportunistically.
+      await this.sessionsRepository.delete(session.id);
+      throw new UnauthorizedException({
+        code: 'AUTH_TOKEN_EXPIRED',
+        message: 'Refresh token has expired.',
+      });
+    }
+
+    const user = await this.usersRepository.findByWallet(payload.wallet);
+    if (!user) {
+      throw new UnauthorizedException({
+        code: 'AUTH_USER_NOT_FOUND',
+        message: 'User associated with this token was not found.',
+      });
+    }
+
+    if (user.status === 'blocked') {
+      throw new UnauthorizedException({
+        code: 'AUTH_USER_BLOCKED',
+        message: 'This account has been suspended.',
+      });
+    }
+
+    // Generate new tokens
+    const newAccessToken = this.jwtService.sign(
+      { wallet: user.wallet_address, type: 'access' },
+      {
+        secret: this.configService.get<string>('JWT_SECRET'),
+        expiresIn: ACCESS_TOKEN_EXPIRATION,
+      },
+    );
+
+    const newRefreshToken = this.jwtService.sign(
+      { wallet: user.wallet_address, type: 'refresh' },
+      {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+        expiresIn: REFRESH_TOKEN_EXPIRATION,
+      },
+    );
+
+    const newRefreshTokenHash = createHash('sha256').update(newRefreshToken).digest('hex');
+    const newRefreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRATION_MS);
+
+    // Rotate: update the existing session to the new token hash/expiration atomically
+    await this.sessionsRepository.update(session.id, {
+      refreshTokenHash: newRefreshTokenHash,
+      expiresAt: newRefreshExpiresAt.toISOString(),
+    });
+
+    return {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      expiresIn: ACCESS_TOKEN_EXPIRATION_SECONDS,
+      tokenType: 'Bearer',
+    };
+  }
+
+  /**
+   * Explicitly logs out a user session by revoking (deleting) the refresh token.
+   */
+  async logout(refreshToken: string): Promise<void> {
+    let payload: any;
+    try {
+      payload = await this.jwtService.verifyAsync(refreshToken, {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      });
+    } catch (error: any) {
+      if (error?.name === 'TokenExpiredError') {
+        const decoded = this.jwtService.decode(refreshToken) as any;
+        if (decoded && decoded.type === 'refresh') {
+          const hash = createHash('sha256').update(refreshToken).digest('hex');
+          await this.sessionsRepository.deleteByHash(hash);
+        }
+        return;
+      }
+      throw new UnauthorizedException({
+        code: 'AUTH_TOKEN_INVALID',
+        message: 'Invalid refresh token signature.',
+      });
+    }
+
+    if (!payload || payload.type !== 'refresh') {
+      throw new UnauthorizedException({
+        code: 'AUTH_TOKEN_INVALID',
+        message: 'Invalid refresh token payload.',
+      });
+    }
+
+    const hash = createHash('sha256').update(refreshToken).digest('hex');
+    await this.sessionsRepository.deleteByHash(hash);
   } 
 }
