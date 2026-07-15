@@ -30,6 +30,7 @@ describe('AuthService', () => {
   const mockJwtService = {
     sign: jest.fn().mockReturnValue('mock.jwt.token'),
     decode: jest.fn(),
+    verifyAsync: jest.fn(),
   };
 
   const mockConfigService = {
