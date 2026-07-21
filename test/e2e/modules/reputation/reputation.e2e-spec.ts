@@ -1,10 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, UnauthorizedException } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { ReputationModule } from '../../../../src/modules/reputation/reputation.module';
 import { ReputationContractClient } from '../../../../src/blockchain/contracts/reputation-contract.client';
 import { SorobanService } from '../../../../src/blockchain/soroban/soroban.service';
+import { JwtAuthGuard } from '../../../../src/common/guards/jwt-auth.guard';
 
 describe('ReputationController (e2e)', () => {
   let app: NestFastifyApplication;
@@ -21,6 +22,20 @@ describe('ReputationController (e2e)', () => {
     getNetworkPassphrase: jest.fn().mockReturnValue('Test SDF Network ; September 2015'),
   };
 
+  // Mock guard that simulates JwtAuthGuard behavior: throws UnauthorizedException
+  // when no Bearer token is present, otherwise sets req.user = { wallet }.
+  const mockJwtAuthGuard = {
+    canActivate: jest.fn((context) => {
+      const req = context.switchToHttp().getRequest();
+      const authHeader = req.headers['authorization'];
+      if (!authHeader?.startsWith('Bearer ')) {
+        throw new UnauthorizedException('No token provided');
+      }
+      req.user = { wallet: validWallet };
+      return true;
+    }),
+  };
+
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [
@@ -32,6 +47,8 @@ describe('ReputationController (e2e)', () => {
       .useValue(mockReputationContract)
       .overrideProvider(SorobanService)
       .useValue(mockSorobanService)
+      .overrideGuard(JwtAuthGuard)
+      .useValue(mockJwtAuthGuard)
       .compile();
 
     app = moduleFixture.createNestApplication<NestFastifyApplication>(
@@ -52,6 +69,19 @@ describe('ReputationController (e2e)', () => {
 
   afterAll(async () => {
     if (app) await app.close();
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    mockJwtAuthGuard.canActivate.mockImplementation((context) => {
+      const req = context.switchToHttp().getRequest();
+      const authHeader = req.headers['authorization'];
+      if (!authHeader?.startsWith('Bearer ')) {
+        throw new UnauthorizedException('No token provided');
+      }
+      req.user = { wallet: validWallet };
+      return true;
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -133,14 +163,50 @@ describe('ReputationController (e2e)', () => {
   // GET /reputation/me
   // ---------------------------------------------------------------------------
   describe('GET /reputation/me', () => {
-    it('should return 401 since auth guard is not yet implemented', async () => {
+    it('should return 200 with reputation data when a valid token is provided', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/reputation/me',
+        headers: { authorization: 'Bearer valid.jwt.token' },
+      });
+
+      expect(res.statusCode).toBe(200);
+
+      const body = JSON.parse(res.payload);
+      expect(body.success).toBe(true);
+      expect(body.message).toBe('Your reputation data retrieved successfully');
+      expect(body.data).toHaveProperty('wallet', validWallet);
+    }, 10000);
+
+    it('should return 401 when no token is provided', async () => {
       const res = await app.inject({
         method: 'GET',
         url: '/reputation/me',
       });
 
-      // Returns 401 because auth guard (API-03) is not wired yet
       expect(res.statusCode).toBe(401);
     });
+
+    it('should return 401 when Authorization header is malformed', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/reputation/me',
+        headers: { authorization: 'InvalidScheme token123' },
+      });
+
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('should not be captured by the :wallet route (route precedence)', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/reputation/me',
+        headers: { authorization: 'Bearer valid.jwt.token' },
+      });
+
+      // If ':wallet' captured 'me', the Stellar address regex would reject it
+      // with a 400 (Invalid Stellar wallet address format) instead of 200/401.
+      expect(res.statusCode).not.toBe(400);
+    }, 10000);
   });
 });

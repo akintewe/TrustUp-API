@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { ReputationController } from '../../../../src/modules/reputation/reputation.controller';
 import { ReputationService } from '../../../../src/modules/reputation/reputation.service';
+import { JwtAuthGuard } from '../../../../src/common/guards/jwt-auth.guard';
 
 describe('ReputationController', () => {
   let controller: ReputationController;
@@ -12,6 +13,7 @@ describe('ReputationController', () => {
   };
 
   const validWallet = 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW';
+  const mockCurrentUser = { wallet: validWallet };
 
   const mockReputationResponse = {
     wallet: validWallet,
@@ -31,7 +33,10 @@ describe('ReputationController', () => {
           useValue: mockReputationService,
         },
       ],
-    }).compile();
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({ canActivate: jest.fn().mockReturnValue(true) })
+      .compile();
 
     controller = module.get<ReputationController>(ReputationController);
     reputationService = module.get<ReputationService>(ReputationService);
@@ -99,11 +104,30 @@ describe('ReputationController', () => {
   // GET /reputation/me
   // ---------------------------------------------------------------------------
   describe('getMyScore', () => {
-    it('should throw UnauthorizedException since auth guard is not yet wired', async () => {
-      await expect(controller.getMyScore({})).rejects.toThrow(
-        UnauthorizedException,
+    it('should return reputation data for the authenticated wallet', async () => {
+      mockReputationService.getReputationScore.mockResolvedValue(mockReputationResponse);
+
+      const result = await controller.getMyScore(mockCurrentUser);
+
+      expect(result).toEqual({
+        success: true,
+        data: mockReputationResponse,
+        message: 'Your reputation data retrieved successfully',
+      });
+      expect(reputationService.getReputationScore).toHaveBeenCalledWith(validWallet);
+      expect(reputationService.getReputationScore).toHaveBeenCalledTimes(1);
+    });
+
+    it('should propagate service errors to the caller', async () => {
+      mockReputationService.getReputationScore.mockRejectedValue(
+        new Error('Contract read failed'),
+      );
+
+      await expect(controller.getMyScore(mockCurrentUser)).rejects.toThrow(
+        'Contract read failed',
       );
     });
   });
+
 });
 
