@@ -5,6 +5,7 @@ import { Job } from 'bullmq';
 import * as StellarSdk from 'stellar-sdk';
 import { SupabaseService } from '../../database/supabase.client';
 import { TransactionType } from '../../modules/transactions/dto/submit-transaction-request.dto';
+import { parseTransactionMetadata } from './transaction-metadata.util';
 
 interface PendingTransaction {
   id: string;
@@ -15,11 +16,6 @@ interface PendingTransaction {
   xdr?: string | null;
   submitted_at: string;
   updated_at: string;
-}
-
-interface TransactionMetadata {
-  loanId?: string;
-  amount?: number;
 }
 
 interface TransactionStatusResult {
@@ -328,7 +324,22 @@ export class TransactionStatusCheckerProcessor extends WorkerHost {
       return {};
     }
 
-    const metadata = this.parseTransactionMetadata(transaction.xdr);
+    let metadata: ReturnType<typeof parseTransactionMetadata>;
+    try {
+      metadata = parseTransactionMetadata(transaction.xdr, this.networkPassphrase);
+    } catch (error) {
+      this.logger.warn(
+        {
+          context: 'TransactionStatusCheckerProcessor',
+          action: 'parseTransactionMetadata',
+          error: error?.message,
+          transactionXdr: transaction.xdr?.slice(0, 64),
+        },
+        'Failed to parse transaction XDR for follow-up actions',
+      );
+      return {};
+    }
+
     if (!metadata?.loanId) {
       return {};
     }
@@ -461,72 +472,6 @@ export class TransactionStatusCheckerProcessor extends WorkerHost {
     }
 
     return { loanId, remainingBalance: updatedBalance, loanStatus: updatedStatus };
-  }
-
-  private parseTransactionMetadata(xdr?: string | null): TransactionMetadata | null {
-    if (!xdr) {
-      return null;
-    }
-
-    try {
-      const transaction = StellarSdk.TransactionBuilder.fromXDR(xdr, this.networkPassphrase);
-      const innerTransaction =
-        transaction instanceof StellarSdk.FeeBumpTransaction
-          ? transaction.innerTransaction
-          : transaction;
-
-      const operation = innerTransaction.operations?.[0];
-      if (!operation || operation.type !== 'invokeHostFunction') {
-        return null;
-      }
-
-      const invocation = (operation.func as any)?._value?._attributes;
-      if (!invocation) {
-        return null;
-      }
-
-      const functionName = invocation.functionName?.toString?.();
-      const args = invocation.args as unknown[];
-      if (!Array.isArray(args) || !functionName) {
-        return null;
-      }
-
-      const nativeArgs = args.map((arg) => {
-        try {
-          return StellarSdk.scValToNative(arg as any);
-        } catch {
-          return undefined;
-        }
-      });
-
-      if (functionName === 'create_loan') {
-        return {
-          loanId: nativeArgs[0] as string,
-        };
-      }
-
-      if (functionName === 'repay_loan') {
-        const loanId = nativeArgs[1] as string;
-        const rawAmount = nativeArgs[2];
-        const amount = typeof rawAmount === 'bigint' ? Number(rawAmount) / 10_000_000 :
-          typeof rawAmount === 'number' ? rawAmount / 10_000_000 : undefined;
-
-        return { loanId, amount };
-      }
-
-      return null;
-    } catch (error) {
-      this.logger.warn(
-        {
-          context: 'TransactionStatusCheckerProcessor',
-          action: 'parseTransactionMetadata',
-          error: error?.message,
-          transactionXdr: xdr?.slice(0, 64),
-        },
-        'Failed to parse transaction XDR for follow-up actions',
-      );
-      return null;
-    }
   }
 
   private async createNotification(

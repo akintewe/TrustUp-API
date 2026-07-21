@@ -9,11 +9,18 @@ import {
   ReminderSummary,
   ReminderType,
 } from './interfaces/reminder.interfaces';
+import { daysUntilDueUtc, getReminderWindow, ReminderWindow } from './reminder-window.util';
 
 const REMINDER_TITLES: Record<ReminderType, string> = {
   payment_reminder_3d: 'Payment Due in 3 Days',
   payment_reminder_1d: 'Payment Due Tomorrow',
   payment_overdue: 'Loan Payment Overdue',
+};
+
+const REMINDER_WINDOW_TO_TYPE: Record<Exclude<ReminderWindow, null>, ReminderType> = {
+  'three-day': 'payment_reminder_3d',
+  'one-day': 'payment_reminder_1d',
+  overdue: 'payment_overdue',
 };
 
 function buildMessage(type: ReminderType, amount: string, dueDate: string): string {
@@ -182,32 +189,21 @@ export class LoanPaymentReminderProcessor extends WorkerHost {
    * consistently — the job always runs at 9 AM UTC, well away from midnight.
    */
   private identifyCandidates(loans: ActiveLoan[]): ReminderCandidate[] {
-    const nowUtc = new Date();
-    // Normalise to start of today in UTC for clean day arithmetic
-    const todayUtc = Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate());
-
+    const now = new Date();
     const candidates: ReminderCandidate[] = [];
 
     for (const loan of loans) {
       if (!loan.next_payment_due) continue;
 
-      const dueUtc = new Date(loan.next_payment_due);
-      const dueDayUtc = Date.UTC(dueUtc.getUTCFullYear(), dueUtc.getUTCMonth(), dueUtc.getUTCDate());
-      const daysUntilDue = Math.round((dueDayUtc - todayUtc) / 86_400_000);
+      const dueDate = new Date(loan.next_payment_due);
+      const window = getReminderWindow(dueDate, now);
+      if (!window) continue;
 
-      let reminderType: ReminderType | null = null;
-
-      if (daysUntilDue === 3) {
-        reminderType = 'payment_reminder_3d';
-      } else if (daysUntilDue === 1) {
-        reminderType = 'payment_reminder_1d';
-      } else if (daysUntilDue < 0) {
-        reminderType = 'payment_overdue';
-      }
-
-      if (reminderType) {
-        candidates.push({ loan, reminderType, daysUntilDue });
-      }
+      candidates.push({
+        loan,
+        reminderType: REMINDER_WINDOW_TO_TYPE[window],
+        daysUntilDue: daysUntilDueUtc(dueDate, now),
+      });
     }
 
     return candidates;
