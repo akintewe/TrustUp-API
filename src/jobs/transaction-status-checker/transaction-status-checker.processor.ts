@@ -1,13 +1,13 @@
-import { Processor, WorkerHost } from "@nestjs/bullmq";
-import { Logger } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
-import { Job } from "bullmq";
-import * as StellarSdk from "stellar-sdk";
-import { LoansRepository } from "../../database/repositories/loans.repository";
-import { NotificationsRepository } from "../../database/repositories/notifications.repository";
-import { TransactionsRepository } from "../../database/repositories/transactions.repository";
-import { TransactionType } from "../../modules/transactions/dto/submit-transaction-request.dto";
-import { parseTransactionMetadata } from "./transaction-metadata.util";
+import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Logger } from '@nestjs/common';
+import { Job } from 'bullmq';
+import { LoansRepository } from '../../database/repositories/loans.repository';
+import { NotificationsRepository } from '../../database/repositories/notifications.repository';
+import { TransactionsRepository } from '../../database/repositories/transactions.repository';
+import { StellarService } from '../../blockchain/stellar/stellar.service';
+import { TransactionNotFoundError } from '../../blockchain/stellar/stellar.errors';
+import { TransactionType } from '../../modules/transactions/dto/submit-transaction-request.dto';
+import { parseTransactionMetadata } from './transaction-metadata.util';
 
 interface PendingTransaction {
   id: string;
@@ -36,27 +36,14 @@ interface FollowUpResult {
 @Processor("transaction-status-checker")
 export class TransactionStatusCheckerProcessor extends WorkerHost {
   private readonly logger = new Logger(TransactionStatusCheckerProcessor.name);
-  private readonly horizonServer: StellarSdk.Horizon.Server;
-  private readonly networkPassphrase: string;
 
   constructor(
-    private readonly configService: ConfigService,
+    private readonly stellarService: StellarService,
     private readonly transactionsRepository: TransactionsRepository,
     private readonly loansRepository: LoansRepository,
     private readonly notificationsRepository: NotificationsRepository,
   ) {
     super();
-
-    const horizonUrl =
-      this.configService.get<string>("STELLAR_HORIZON_URL") ||
-      "https://horizon-testnet.stellar.org";
-
-    this.networkPassphrase =
-      this.configService.get<string>("STELLAR_NETWORK_PASSPHRASE") ||
-      StellarSdk.Networks.TESTNET;
-
-    this.horizonServer = new StellarSdk.Horizon.Server(horizonUrl);
-    this.logger.log(`Horizon client initialized: ${horizonUrl}`);
   }
 
   async process(_job: Job): Promise<void> {
@@ -183,51 +170,22 @@ export class TransactionStatusCheckerProcessor extends WorkerHost {
     }));
   }
 
-  private async checkTransactionStatus(
-    hash: string,
-  ): Promise<TransactionStatusResult> {
-    const maxAttempts = 3;
-    let attempt = 0;
-
-    while (attempt < maxAttempts) {
-      try {
-        attempt += 1;
-        const response = await this.horizonServer
-          .transactions()
-          .transaction(hash)
-          .call();
-        return {
-          found: true,
-          successful: response.successful === true,
-          result: response,
-          errorMessage: this.extractHorizonError(response),
-        };
-      } catch (error) {
-        if (this.isNotFoundError(error)) {
-          return { found: false };
-        }
-
-        if (!this.isTransientHorizonError(error) || attempt >= maxAttempts) {
-          throw error;
-        }
-
-        const delayMs = 1000 * attempt;
-        this.logger.warn(
-          {
-            context: "TransactionStatusCheckerProcessor",
-            action: "checkTransactionStatus",
-            transactionHash: hash,
-            attempt,
-            delayMs,
-            error: error?.message,
-          },
-          "Transient Horizon error — retrying",
-        );
-        await this.wait(delayMs);
+  private async checkTransactionStatus(hash: string): Promise<TransactionStatusResult> {
+    try {
+      const response = await this.stellarService.getTransaction(hash);
+      return {
+        found: true,
+        successful: response.successful === true,
+        result: response,
+        errorMessage: this.extractHorizonError(response),
+      };
+    } catch (error) {
+      if (error instanceof TransactionNotFoundError) {
+        return { found: false };
       }
-    }
 
-    return { found: false };
+      throw error;
+    }
   }
 
   private extractHorizonError(response: any): string | undefined {
@@ -245,34 +203,6 @@ export class TransactionStatusCheckerProcessor extends WorkerHost {
     }
 
     return JSON.stringify(codes);
-  }
-
-  private isNotFoundError(error: unknown): boolean {
-    return error instanceof StellarSdk.NotFoundError;
-  }
-
-  private isTransientHorizonError(error: unknown): boolean {
-    if (error instanceof StellarSdk.NetworkError) {
-      return true;
-    }
-
-    const status = (error as any)?.response?.status;
-    if (status === 429 || status >= 500) {
-      return true;
-    }
-
-    const message = String((error as any)?.message ?? "").toLowerCase();
-    return (
-      message.includes("timeout") ||
-      message.includes("rate limit") ||
-      message.includes("throttl") ||
-      message.includes("temporar") ||
-      message.includes("network")
-    );
-  }
-
-  private wait(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private async finalizeTransaction(
@@ -337,7 +267,7 @@ export class TransactionStatusCheckerProcessor extends WorkerHost {
 
     let metadata: ReturnType<typeof parseTransactionMetadata>;
     try {
-      metadata = parseTransactionMetadata(transaction.xdr, this.networkPassphrase);
+      metadata = parseTransactionMetadata(transaction.xdr, this.stellarService.getNetworkPassphrase());
     } catch (error) {
       this.logger.warn(
         {
