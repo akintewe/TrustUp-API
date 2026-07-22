@@ -7,10 +7,12 @@ import { SupabaseService } from '../../database/supabase.client';
 import { LoansRepository } from '../../database/repositories/loans.repository';
 import { NotificationsRepository } from '../../database/repositories/notifications.repository';
 import { TransactionsRepository } from '../../database/repositories/transactions.repository';
+import { StellarModule } from '../../blockchain/stellar/stellar.module';
 
 @Module({
   imports: [
     ConfigModule,
+    StellarModule,
     BullModule.registerQueue({ name: 'transaction-status-checker' }),
   ],
   providers: [
