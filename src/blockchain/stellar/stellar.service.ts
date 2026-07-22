@@ -55,16 +55,13 @@ export class StellarService {
   /**
    * Submits a signed transaction to the network. Not retried — a submission
    * that reaches Horizon may already have been applied, so retrying could
-   * double-submit.
+   * double-submit. Errors are rethrown as-is (not normalized) since callers
+   * need the raw Horizon result_codes to map to user-facing messages.
    */
   async submitTransaction(
     transaction: StellarSdk.Transaction | StellarSdk.FeeBumpTransaction,
   ): Promise<Horizon.HorizonApi.SubmitTransactionResponse> {
-    try {
-      return await this.withTimeout(this.horizonServer.submitTransaction(transaction));
-    } catch (error) {
-      throw this.normalizeError(error, 'submitTransaction');
-    }
+    return this.withTimeout(this.horizonServer.submitTransaction(transaction));
   }
 
   /**
