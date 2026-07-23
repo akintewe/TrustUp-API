@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 import { LoansService } from '../../../../src/modules/loans/loans.service';
 import { ReputationService } from '../../../../src/modules/reputation/reputation.service';
+import { LoansRepository } from '../../../../src/database/repositories/loans.repository';
+import { MerchantsRepository } from '../../../../src/database/repositories/merchants.repository';
 import { SupabaseService } from '../../../../src/database/supabase.client';
 import { CreditLineContractClient } from '../../../../src/blockchain/contracts/credit-line-contract.client';
 import { ReputationContractClient } from '../../../../src/blockchain/contracts/reputation-contract.client';
@@ -29,7 +31,9 @@ describe('LoansService', () => {
     order: jest.fn().mockReturnThis(),
     range: jest.fn().mockReturnThis(),
     single: jest.fn(),
+    maybeSingle: jest.fn(),
     insert: jest.fn(),
+    update: jest.fn().mockReturnThis(),
   };
 
   const mockSupabaseClient = {
@@ -37,6 +41,7 @@ describe('LoansService', () => {
   };
 
   const mockSupabaseService = {
+    getClient: jest.fn().mockReturnValue(mockSupabaseClient),
     getServiceRoleClient: jest.fn().mockReturnValue(mockSupabaseClient),
   };
 
@@ -57,6 +62,8 @@ describe('LoansService', () => {
         { provide: SupabaseService, useValue: mockSupabaseService },
         { provide: CreditLineContractClient, useValue: mockCreditLineContractClient },
         { provide: ReputationContractClient, useValue: mockReputationContractClient },
+        LoansRepository,
+        MerchantsRepository,
       ],
     }).compile();
 
@@ -69,6 +76,8 @@ describe('LoansService', () => {
     mockSupabaseFrom.in.mockReturnThis();
     mockSupabaseFrom.order.mockReturnThis();
     mockSupabaseFrom.range.mockReturnThis();
+    mockSupabaseFrom.update.mockReturnThis();
+    mockSupabaseFrom.maybeSingle.mockImplementation(() => mockSupabaseFrom.single());
     mockSupabaseFrom.insert.mockResolvedValue({ error: null });
     mockCreditLineContractClient.buildCreateLoanTransaction.mockResolvedValue('AAAAAgAAAAC...');
     mockCreditLineContractClient.buildRepayLoanTx.mockResolvedValue('AAAAAgAAAAA...');
@@ -106,7 +115,7 @@ describe('LoansService', () => {
     function mockMerchantNotFound() {
       mockSupabaseFrom.single.mockResolvedValue({
         data: null,
-        error: { message: 'not found' },
+        error: null,
       });
     }
 
@@ -361,7 +370,7 @@ describe('LoansService', () => {
     it('should throw NotFoundException when loan does not exist', async () => {
       mockSupabaseFrom.single.mockResolvedValue({
         data: null,
-        error: { message: 'not found' },
+        error: null,
       });
 
       await expect(service.repayLoan(validWallet, loanId, { amount: 50 })).rejects.toThrow(

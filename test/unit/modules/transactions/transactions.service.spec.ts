@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as StellarSdk from 'stellar-sdk';
+import { TransactionsRepository } from '../../../../src/database/repositories/transactions.repository';
 import { SupabaseService } from '../../../../src/database/supabase.client';
 import { TransactionsService } from '../../../../src/modules/transactions/transactions.service';
 import { TransactionType } from '../../../../src/modules/transactions/dto/submit-transaction-request.dto';
@@ -91,6 +92,7 @@ describe('TransactionsService', () => {
         { provide: CACHE_MANAGER, useValue: mockCacheManager },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: SupabaseService, useValue: mockSupabaseService },
+        TransactionsRepository,
       ],
     }).compile();
 
